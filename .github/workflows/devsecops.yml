@@ -1,0 +1,397 @@
+# -----------------------------------------------------------------------------
+# DevSecOps CI/CD pipeline for the Juice Shop fork (lives in ./juice-shop)
+#
+# Flow:  Secrets scan (Gitleaks) ─┐
+#        SAST        (Semgrep)   ─┤
+#        SCA         (Trivy fs)  ─┼─► Build container ─► Release ─► Deploy to Cloud Run
+#        SBOM        (Syft)      ─┘   (push to Docker Hub + Artifact Registry)
+#
+# The security scans are REPORT-ONLY (continue-on-error) because Juice Shop is
+# OWASP's deliberately vulnerable app — a blocking gate would never let it ship.
+# Results are uploaded to the repo's Security tab (SARIF) and as build artifacts.
+# To turn any scan into a hard gate, drop its `continue-on-error` / `exit-code: 0`.
+#
+# ---------------------------------------------------------------------------
+# Required repository SECRETS (Settings ▸ Secrets and variables ▸ Actions):
+#   DOCKERHUB_USERNAME   Docker Hub user that can push to joanjoho/devsecops
+#   DOCKERHUB_TOKEN      Docker Hub access token (not the password)
+#   GCP_PROJECT_ID       Google Cloud project id
+#   GCP_SA_KEY           JSON key of a service account with:
+#                          - Artifact Registry Writer
+#                          - Cloud Run Admin
+#                          - Service Account User
+#   SEMGREP_APP_TOKEN    (optional) enables Semgrep managed rules
+#
+# Optional repository VARIABLES (sensible defaults applied if unset):
+#   GCP_REGION           default: us-central1   (used for Artifact Registry + Cloud Run)
+#   GAR_REPOSITORY       default: devsecops      (Artifact Registry docker repo name)
+#   CLOUD_RUN_SERVICE    default: juice-shop
+#
+# One-time GCP setup (run locally once):
+#   gcloud artifacts repositories create devsecops \
+#       --repository-format=docker --location=us-central1
+# ---------------------------------------------------------------------------
+name: DevSecOps CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write          # create GitHub Releases
+  security-events: write   # upload SARIF to the Security tab
+  id-token: write          # allow GCP Workload Identity Federation (optional)
+  actions: read
+
+concurrency:
+  group: devsecops-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Juice Shop lives in a subfolder of this DevSecOps repo
+  CONTEXT: ./juice-shop
+  DOCKERHUB_IMAGE: docker.io/joanjoho/devsecops
+
+jobs:
+  # ===========================================================================
+  # 1) SECRETS SCANNING — Gitleaks
+  # ===========================================================================
+  secrets-scan:
+    name: Secrets · Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Gitleaks
+        run: |
+          VERSION=8.21.2
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo install gitleaks /usr/local/bin/gitleaks
+      - name: Run Gitleaks
+        continue-on-error: true   # Juice Shop ships intentional secrets (ctf.key, JWT keys)
+        run: |
+          gitleaks detect \
+            --source ./juice-shop \
+            --report-format sarif \
+            --report-path gitleaks.sarif \
+            --redact --exit-code 1 --no-banner || echo "::warning::Gitleaks found potential secrets (report-only)"
+      - name: Upload SARIF to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-secrets-gitleaks
+          path: gitleaks.sarif
+          if-no-files-found: ignore
+
+  # ===========================================================================
+  # 2) SAST — Semgrep
+  # ===========================================================================
+  sast:
+    name: SAST · Semgrep
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Semgrep
+        continue-on-error: true
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          semgrep scan \
+            --config auto \
+            --sarif --output semgrep.sarif \
+            ./juice-shop || echo "::warning::Semgrep reported findings (report-only)"
+      - name: Upload SARIF to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-sast-semgrep
+          path: semgrep.sarif
+          if-no-files-found: ignore
+
+  # ===========================================================================
+  # 3) SCA — Trivy filesystem scan (dependencies + misconfig + secrets)
+  # ===========================================================================
+  sca:
+    name: SCA · Trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan (SARIF)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: ./juice-shop
+          format: sarif
+          output: trivy-sca.sarif
+          scanners: vuln,misconfig,secret
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: '0'          # report-only
+      - name: Trivy filesystem scan (human-readable table)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: ./juice-shop
+          format: table
+          output: trivy-sca.txt
+          scanners: vuln,misconfig,secret
+          severity: CRITICAL,HIGH
+      - name: Upload SARIF to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-sca.sarif
+          category: trivy-sca
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-sca-trivy
+          path: |
+            trivy-sca.sarif
+            trivy-sca.txt
+          if-no-files-found: ignore
+
+  # ===========================================================================
+  # 4) SBOM — Syft (source, CycloneDX + SPDX)
+  # ===========================================================================
+  sbom:
+    name: SBOM · Syft
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./juice-shop
+          format: cyclonedx-json
+          output-file: sbom.source.cyclonedx.json
+          artifact-name: sbom-source-cyclonedx
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./juice-shop
+          format: spdx-json
+          output-file: sbom.source.spdx.json
+          artifact-name: sbom-source-spdx
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-source
+          path: |
+            sbom.source.cyclonedx.json
+            sbom.source.spdx.json
+
+  # ===========================================================================
+  # 5) BUILD & PUSH container image (Docker Hub + Artifact Registry) + image scans
+  # ===========================================================================
+  build-and-push:
+    name: Build & Push image
+    needs: [secrets-scan, sast, sca, sbom]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      dockerhub_ref: ${{ steps.meta.outputs.dockerhub_ref }}
+      gar_ref: ${{ steps.meta.outputs.gar_ref }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image metadata
+        id: meta
+        run: |
+          VERSION=$(node -p "require('./juice-shop/package.json').version")
+          TAG="v${VERSION}-build.${{ github.run_number }}"
+          REGION="${{ vars.GCP_REGION || 'us-central1' }}"
+          GAR_REPO="${{ vars.GAR_REPOSITORY || 'devsecops' }}"
+          GAR_HOST="${REGION}-docker.pkg.dev"
+          GAR_BASE="${GAR_HOST}/${{ secrets.GCP_PROJECT_ID }}/${GAR_REPO}/juice-shop"
+          {
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+            echo "gar_host=$GAR_HOST"
+            echo "dockerhub_ref=${DOCKERHUB_IMAGE}:${TAG}"
+            echo "gar_ref=${GAR_BASE}:${TAG}"
+            echo "gar_base=${GAR_BASE}"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # --- Registry logins (skipped on PRs, which build without pushing) ---
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Authenticate to Google Cloud
+        if: github.event_name != 'pull_request'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Login to Artifact Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.meta.outputs.gar_host }}
+          username: _json_key
+          password: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          provenance: false
+          build-args: |
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+            VCS_REF=${{ github.sha }}
+          tags: |
+            ${{ env.DOCKERHUB_IMAGE }}:latest
+            ${{ env.DOCKERHUB_IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.DOCKERHUB_IMAGE }}:sha-${{ github.sha }}
+            ${{ steps.meta.outputs.gar_base }}:latest
+            ${{ steps.meta.outputs.gar_ref }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy image scan (SARIF)
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.meta.outputs.dockerhub_ref }}
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+      - name: Upload image-scan SARIF
+        if: github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Generate image SBOM (Syft, CycloneDX)
+        if: github.event_name != 'pull_request'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.meta.outputs.dockerhub_ref }}
+          format: cyclonedx-json
+          output-file: sbom.image.cyclonedx.json
+          artifact-name: sbom-image-cyclonedx
+
+      - name: Upload image scan/SBOM artifacts
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-image
+          path: |
+            trivy-image.sarif
+            sbom.image.cyclonedx.json
+          if-no-files-found: ignore
+
+  # ===========================================================================
+  # 6) RELEASE — one GitHub Release per successful build (with scans + SBOMs)
+  # ===========================================================================
+  release:
+    name: GitHub Release
+    needs: build-and-push
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all reports & SBOMs
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Flatten assets
+        run: |
+          mkdir -p dist-assets
+          find release-assets -type f \( -name '*.json' -o -name '*.sarif' -o -name '*.txt' \) \
+            -exec cp {} dist-assets/ \;
+          ls -la dist-assets
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-and-push.outputs.tag }}
+          name: ${{ needs.build-and-push.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            ## Automated DevSecOps build
+
+            **Version:** `${{ needs.build-and-push.outputs.version }}`  (build #${{ github.run_number }})
+            **Commit:** ${{ github.sha }}
+
+            ### Container image
+            - Docker Hub: `${{ needs.build-and-push.outputs.dockerhub_ref }}`
+            - Artifact Registry: `${{ needs.build-and-push.outputs.gar_ref }}`
+            - Digest: `${{ needs.build-and-push.outputs.digest }}`
+
+            ### Security gates (report-only — Juice Shop is intentionally vulnerable)
+            - 🔑 Secrets — Gitleaks
+            - 🔍 SAST — Semgrep
+            - 📦 SCA — Trivy (filesystem + image)
+            - 🧾 SBOM — Syft (source + image, CycloneDX & SPDX)
+
+            Full results are in the repo **Security** tab and attached below.
+          files: dist-assets/*
+
+  # ===========================================================================
+  # 7) DEPLOY — Google Cloud Run (pulls the Artifact Registry image)
+  # ===========================================================================
+  deploy:
+    name: Deploy · Cloud Run
+    needs: [build-and-push, release]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ vars.CLOUD_RUN_SERVICE || 'juice-shop' }}
+          region: ${{ vars.GCP_REGION || 'us-central1' }}
+          image: ${{ needs.build-and-push.outputs.gar_ref }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          flags: >-
+            --allow-unauthenticated
+            --port=3000
+            --memory=1Gi
+            --cpu=1
+            --max-instances=2
+      - name: Show deployed URL
+        run: echo "Deployed to ${{ steps.deploy.outputs.url }}"

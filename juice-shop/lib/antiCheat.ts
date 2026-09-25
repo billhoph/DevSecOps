@@ -1,0 +1,251 @@
+/*
+ * Copyright (c) 2014-2026 Bjoern Kimminich & the OWASP Juice Shop contributors.
+ * SPDX-License-Identifier: MIT
+ */
+
+import config from 'config'
+import colors from 'colors/safe'
+import path from 'path'
+import fs from 'fs'
+import { retrieveCodeSnippet } from '../routes/vulnCodeSnippet'
+import { readFixes } from '../routes/vulnCodeFixes'
+import { type Challenge } from '../data/types'
+import { getCodeChallenges } from './codingChallenges'
+import logger from './logger'
+import { type NextFunction, type Request, type Response } from 'express'
+import * as utils from './utils'
+// @ts-expect-error FIXME due to non-existing type definitions for median
+import median from 'median'
+import { type ChallengeKey } from '@juice-shop/models/challenge'
+
+const tightlyCoupledChallenges = {
+  loginAdminChallenge: ['weakPasswordChallenge'],
+  nullByteChallenge: ['easterEggLevelOneChallenge', 'forgottenDevBackupChallenge', 'forgottenBackupChallenge', 'misplacedSignatureFileChallenge'],
+  deprecatedInterfaceChallenge: ['uploadTypeChallenge', 'xxeFileDisclosureChallenge', 'xxeDosChallenge', 'yamlBombChallenge'],
+  uploadSizeChallenge: ['uploadTypeChallenge', 'xxeFileDisclosureChallenge', 'xxeDosChallenge', 'yamlBombChallenge'],
+  uploadTypeChallenge: ['xxeFileDisclosureChallenge', 'xxeDosChallenge', 'yamlBombChallenge']
+}
+
+const looselyCoupledChallenges = [
+  ['easterEggLevelOneChallenge', 'forgottenDevBackupChallenge', 'forgottenBackupChallenge', 'misplacedSignatureFileChallenge'],
+  ['uploadSizeChallenge', 'uploadTypeChallenge'],
+  ['localXssChallenge', 'xssBonusChallenge'],
+  ['fileWriteChallenge', 'videoXssChallenge'],
+  ['misplacedIacFiles', 'iacLeakedKeyChallenge', 'vulnerableDockerImageChallenge']
+]
+
+const trivialChallenges = ['errorHandlingChallenge', 'privacyPolicyChallenge', 'closeNotificationsChallenge']
+
+const solves: Array<{ challenge: any, phase: string, timestamp: Date, cheatScore: number }> = [{ challenge: {}, phase: 'server start', timestamp: new Date(), cheatScore: 0 }] // seed with server start timestamp
+
+const preSolveInteractions: Array<{ challengeKey: ChallengeKey, urlFragments: string[], interactions: boolean[] }> = [
+  { challengeKey: 'missingEncodingChallenge', urlFragments: ['/assets/public/images/uploads/%F0%9F%98%BC-'], interactions: [false] },
+  { challengeKey: 'directoryListingChallenge', urlFragments: ['/ftp'], interactions: [false] },
+  { challengeKey: 'easterEggLevelOneChallenge', urlFragments: ['/ftp', '/ftp/eastere.gg'], interactions: [false, false] },
+  { challengeKey: 'easterEggLevelTwoChallenge', urlFragments: ['/ftp', '/gur/qrif/ner/fb/shaal/gurl/uvq/na/rnfgre/rtt/jvguva/gur/rnfgre/rtt'], interactions: [false, false] },
+  { challengeKey: 'forgottenDevBackupChallenge', urlFragments: ['/ftp', '/ftp/package.json.bak'], interactions: [false, false] },
+  { challengeKey: 'forgottenBackupChallenge', urlFragments: ['/ftp', '/ftp/coupons_2013.md.bak'], interactions: [false, false] },
+  { challengeKey: 'loginSupportChallenge', urlFragments: ['/ftp', '/ftp/incident-support.kdbx'], interactions: [false, false] },
+  { challengeKey: 'misplacedSignatureFileChallenge', urlFragments: ['/ftp', '/ftp/suspicious_errors.yml'], interactions: [false, false] },
+  { challengeKey: 'misplacedIacFiles', urlFragments: ['/infrastructure'], interactions: [false] },
+  { challengeKey: 'rceChallenge', urlFragments: ['/api-docs', '/b2b/v2/orders'], interactions: [false, false] },
+  { challengeKey: 'rceOccupyChallenge', urlFragments: ['/api-docs', '/b2b/v2/orders'], interactions: [false, false] }
+]
+
+const challengeSourceFiles: Record<string, string[]> = {
+  knownVulnerableComponentChallenge: ['ftp/package.json.bak'],
+  typosquattingNpmChallenge: ['ftp/package.json.bak'],
+  supplyChainAttackChallenge: ['ftp/package.json.bak'],
+  weirdCryptoChallenge: ['ftp/package.json.bak'],
+  vulnerableDockerImageChallenge: ['infrastructure/docker-compose.yml']
+}
+
+export const checkForPreSolveInteractions = () => ({ url }: Request, res: Response, next: NextFunction) => {
+  preSolveInteractions.forEach((preSolveInteraction) => {
+    for (let i = 0; i < preSolveInteraction.urlFragments.length; i++) {
+      if (url.endsWith(preSolveInteraction.urlFragments[i])) {
+        preSolveInteraction.interactions[i] = true
+      }
+    }
+  })
+  next()
+}
+
+export const calculateCheatScore = (challenge: Challenge, isCheating = false) => {
+  if (isCheating) {
+    logger.info(`Cheat score for ${colors.cyan(challenge.key)} solved by using a bypass, direct access, etc. cheat: ${colors.red('1')}`)
+    solves.push({ challenge, phase: 'hack it', timestamp: new Date(), cheatScore: 1 })
+    return 1
+  } else {
+    const timestamp = new Date()
+    let cheatScore = 0
+    let timeFactor = 2
+    timeFactor *= (config.get('challenges.showHints') ? 1 : 1.5)
+    timeFactor *= (challenge.tutorialOrder && config.get('hackingInstructor.isEnabled') ? 0.5 : 1)
+    if (areTightlyCoupled(challenge, previous().challenge) || isLooselyCoupledToPreviouslySolved(challenge) || isTrivial(challenge)) {
+      timeFactor = 0
+    }
+
+    const minutesExpectedToSolve = challenge.difficulty * timeFactor
+    const minutesSincePreviousSolve = (timestamp.getTime() - previous().timestamp.getTime()) / 60000
+    if (minutesExpectedToSolve > 0) {
+      cheatScore += Math.max(0, 1 - (minutesSincePreviousSolve / minutesExpectedToSolve))
+    }
+
+    const preSolveInteraction = preSolveInteractions.find((preSolveInteraction) => preSolveInteraction.challengeKey === challenge.key)
+    let percentPrecedingInteraction = -1
+    if (preSolveInteraction) {
+      percentPrecedingInteraction = preSolveInteraction.interactions.filter(Boolean).length / (preSolveInteraction.interactions.length)
+      const multiplierForMissingExpectedInteraction = 1 + Math.max(0, 1 - percentPrecedingInteraction) / 2
+      cheatScore *= multiplierForMissingExpectedInteraction
+    }
+
+    cheatScore = Math.min(1, cheatScore)
+
+    logger.info(`Cheat score for ${areTightlyCoupled(challenge, previous().challenge) ? 'tightly coupled ' : (isLooselyCoupledToPreviouslySolved(challenge) ? 'loosely coupled ' : (isTrivial(challenge) ? 'trivial ' : ''))}${challenge.tutorialOrder ? 'tutorial ' : ''}${colors.cyan(challenge.key)} solved in ${Math.round(minutesSincePreviousSolve)}min (expected ~${minutesExpectedToSolve}min) with${config.get('challenges.showHints') ? '' : 'out'} hints allowed${percentPrecedingInteraction > -1 ? (' and ' + percentPrecedingInteraction * 100 + '% expected preceding URL interaction') : ''}: ${cheatScore < 0.33 ? colors.green(cheatScore.toString()) : (cheatScore < 0.66 ? colors.yellow(cheatScore.toString()) : colors.red(cheatScore.toString()))}`)
+    solves.push({ challenge, phase: 'hack it', timestamp, cheatScore })
+    return cheatScore
+  }
+}
+
+export const calculateFindItCheatScore = async (challenge: Challenge) => {
+  const timestamp = new Date()
+  let timeFactor = 0.001
+  timeFactor *= (challenge.key === 'scoreBoardChallenge' && config.get('hackingInstructor.isEnabled') ? 0.5 : 1)
+  let cheatScore = 0
+
+  const codeSnippet = await retrieveCodeSnippet(challenge.key)
+  if (codeSnippet == null) {
+    return 0
+  }
+  const { snippet, vulnLines } = codeSnippet
+  timeFactor *= vulnLines.length
+  const identicalSolved = await checkForIdenticalSolvedChallenge(challenge)
+  if (identicalSolved) {
+    timeFactor = 0.8 * timeFactor
+  }
+  const minutesExpectedToSolve = Math.ceil(snippet.length * timeFactor)
+  const minutesSincePreviousSolve = (timestamp.getTime() - previous().timestamp.getTime()) / 60000
+  cheatScore += Math.max(0, 1 - (minutesSincePreviousSolve / minutesExpectedToSolve))
+
+  logger.info(`Cheat score for "Find it" phase of ${challenge.key === 'scoreBoardChallenge' && config.get('hackingInstructor.isEnabled') ? 'tutorial ' : ''}${colors.cyan(challenge.key)} solved in ${Math.round(minutesSincePreviousSolve)}min (expected ~${minutesExpectedToSolve}min): ${cheatScore < 0.33 ? colors.green(cheatScore.toString()) : (cheatScore < 0.66 ? colors.yellow(cheatScore.toString()) : colors.red(cheatScore.toString()))}`)
+  solves.push({ challenge, phase: 'find it', timestamp, cheatScore })
+
+  return cheatScore
+}
+
+export const calculateFixItCheatScore = async (challenge: Challenge) => {
+  const timestamp = new Date()
+  let cheatScore = 0
+
+  const { fixes } = readFixes(challenge.key)
+  const minutesExpectedToSolve = Math.floor(fixes.length / 2)
+  const minutesSincePreviousSolve = (timestamp.getTime() - previous().timestamp.getTime()) / 60000
+  cheatScore += Math.max(0, 1 - (minutesSincePreviousSolve / minutesExpectedToSolve))
+
+  logger.info(`Cheat score for "Fix it" phase of ${colors.cyan(challenge.key)} solved in ${Math.round(minutesSincePreviousSolve)}min (expected ~${minutesExpectedToSolve}min): ${cheatScore < 0.33 ? colors.green(cheatScore.toString()) : (cheatScore < 0.66 ? colors.yellow(cheatScore.toString()) : colors.red(cheatScore.toString()))}`)
+  solves.push({ challenge, phase: 'fix it', timestamp, cheatScore })
+  return cheatScore
+}
+
+export const totalCheatScore = () => {
+  return solves.length > 1 ? median(solves.map(({ cheatScore }) => cheatScore)) : 0
+}
+
+function areTightlyCoupled (challenge: Challenge, previousChallenge: Challenge) {
+  // @ts-expect-error FIXME any type issues
+  return tightlyCoupledChallenges[challenge.key]?.indexOf(previousChallenge.key) > -1 || tightlyCoupledChallenges[previousChallenge.key]?.indexOf(challenge.key) > -1
+}
+
+function isLooselyCoupledToPreviouslySolved (challenge: Challenge) {
+  for (const group of looselyCoupledChallenges) {
+    if (group.includes(challenge.key)) {
+      for (const solve of solves) {
+        if (group.includes(solve.challenge.key) && solve.challenge.key !== challenge.key) {
+          return true
+        }
+      }
+    }
+  }
+  return false
+}
+
+function isTrivial (challenge: Challenge) {
+  return trivialChallenges.includes(challenge.key)
+}
+
+function previous () {
+  return solves[solves.length - 1]
+}
+
+export const reset = () => {
+  solves.length = 0
+  solves.push({ challenge: {}, phase: 'server start', timestamp: new Date(), cheatScore: 0 })
+  preSolveInteractions.forEach((preSolveInteraction) => {
+    preSolveInteraction.interactions.fill(false)
+  })
+}
+
+const sourceFileCache = new Map<string, string>()
+
+function loadSourceFile (relativePath: string): string {
+  if (sourceFileCache.has(relativePath)) {
+    return sourceFileCache.get(relativePath)!
+  }
+  try {
+    const content = fs.readFileSync(path.resolve(relativePath), 'utf8')
+    sourceFileCache.set(relativePath, content)
+    return content
+  } catch {
+    return ''
+  }
+}
+
+export function checkForSourceFileOverlap (challengeKey: string, submission: string): boolean {
+  const sourceFiles = challengeSourceFiles[challengeKey]
+  if (!sourceFiles || submission.length < 100) {
+    return false
+  }
+
+  for (const filePath of sourceFiles) {
+    const fileContent = loadSourceFile(filePath)
+    if (fileContent.length === 0) continue
+
+    const overlapScore = utils.diceCoefficient(submission.toLowerCase().trim(), fileContent.toLowerCase().trim())
+
+    if (overlapScore >= 0.75) {
+      logger.warn(`Detected source file overlap for ${colors.cyan(challengeKey)}: ${Math.round(overlapScore * 100)}% similarity with ${filePath}`)
+      return true
+    }
+  }
+  return false
+}
+
+export const checkForIdenticalSolvedChallenge = async (challenge: Challenge): Promise<boolean> => {
+  const codingChallenges = await getCodeChallenges()
+  if (!codingChallenges.has(challenge.key)) {
+    return false
+  }
+
+  const codingChallengesToCompareTo = codingChallenges.get(challenge.key)
+  if (!codingChallengesToCompareTo?.snippet) {
+    return false
+  }
+  const snippetToCompareTo = codingChallengesToCompareTo.snippet
+
+  for (const [challengeKey, { snippet }] of codingChallenges.entries()) {
+    if (challengeKey === challenge.key) {
+      // don't compare to itself
+      continue
+    }
+
+    if (snippet === snippetToCompareTo) {
+      for (const solvedChallenges of solves) {
+        if (solvedChallenges.phase === 'find it') {
+          return true
+        }
+      }
+    }
+  }
+  return false
+}
