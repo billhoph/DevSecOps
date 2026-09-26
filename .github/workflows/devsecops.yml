@@ -254,6 +254,25 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
+      - name: Set up gcloud
+        if: github.event_name != 'pull_request'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Ensure Artifact Registry repository exists
+        if: github.event_name != 'pull_request'
+        run: |
+          REGION="${{ vars.GCP_REGION || 'us-central1' }}"
+          REPO="${{ vars.GAR_REPOSITORY || 'devsecops' }}"
+          PROJECT="${{ secrets.GCP_PROJECT_ID }}"
+          if gcloud artifacts repositories describe "$REPO" --location="$REGION" --project="$PROJECT" >/dev/null 2>&1; then
+            echo "Artifact Registry repo '$REPO' already exists in $REGION."
+          else
+            echo "Creating Artifact Registry repo '$REPO' in $REGION ..."
+            gcloud artifacts repositories create "$REPO" \
+              --repository-format=docker --location="$REGION" --project="$PROJECT" \
+              --description="DevSecOps images (auto-created by CI)"
+          fi
+
       - name: Login to Artifact Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
