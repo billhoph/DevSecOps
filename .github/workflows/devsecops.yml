@@ -136,7 +136,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Trivy filesystem scan (SARIF)
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: ./juice-shop
@@ -147,7 +147,7 @@ jobs:
           exit-code: '0'          # report-only
       - name: Trivy filesystem scan (human-readable table)
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: ./juice-shop
@@ -284,7 +284,7 @@ jobs:
       - name: Trivy image scan (SARIF)
         if: github.event_name != 'pull_request'
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: ${{ steps.meta.outputs.dockerhub_ref }}
@@ -379,6 +379,9 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+      # Deploying with a FIXED service name updates that same Cloud Run service
+      # in place (a new revision) on every build — the instance and its URL stay
+      # constant across builds; Cloud Run never creates a new service/URL here.
       - name: Deploy to Cloud Run
         id: deploy
         uses: google-github-actions/deploy-cloudrun@v2
@@ -393,5 +396,17 @@ jobs:
             --memory=1Gi
             --cpu=1
             --max-instances=2
-      - name: Show deployed URL
-        run: echo "Deployed to ${{ steps.deploy.outputs.url }}"
+      - name: Publish deployed URL
+        run: |
+          URL="${{ steps.deploy.outputs.url }}"
+          echo "Deployed to $URL"
+          {
+            echo "## 🚀 Cloud Run deployment"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Service** | \`${{ vars.CLOUD_RUN_SERVICE || 'juice-shop' }}\` (${{ vars.GCP_REGION || 'us-central1' }}) |"
+            echo "| **URL** | $URL |"
+            echo "| **Image** | \`${{ needs.build-and-push.outputs.gar_ref }}\` |"
+            echo "| **Release** | \`${{ needs.build-and-push.outputs.tag }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
