@@ -208,6 +208,7 @@ jobs:
     name: Build & Push image
     needs: [secrets-scan, sast, sca, sbom]
     runs-on: ubuntu-latest
+    environment: DSO_pipeline   # secrets (DOCKERHUB_*, GCP_*) live in this environment
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
@@ -372,7 +373,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
-      name: production
+      name: DSO_pipeline
       url: ${{ steps.deploy.outputs.url }}
     steps:
       - name: Authenticate to Google Cloud
