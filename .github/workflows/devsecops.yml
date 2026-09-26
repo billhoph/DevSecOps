@@ -210,10 +210,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: DSO_pipeline   # secrets (DOCKERHUB_*, GCP_*) live in this environment
     outputs:
+      # Only secret-free values are exposed as job outputs: GitHub scrubs any
+      # output containing a secret value (project id / docker hub username), so
+      # image refs are rebuilt inline in the consuming jobs instead.
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
-      dockerhub_ref: ${{ steps.meta.outputs.dockerhub_ref }}
-      gar_ref: ${{ steps.meta.outputs.gar_ref }}
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
@@ -380,9 +381,11 @@ jobs:
             **Commit:** ${{ github.sha }}
 
             ### Container image
-            - Docker Hub: `${{ needs.build-and-push.outputs.dockerhub_ref }}`
-            - Artifact Registry: `${{ needs.build-and-push.outputs.gar_ref }}`
+            - Tag: `${{ needs.build-and-push.outputs.tag }}`
             - Digest: `${{ needs.build-and-push.outputs.digest }}`
+            - Pushed to Docker Hub (`joanjoho/devsecops`) and Google Artifact Registry.
+              Full registry refs and the Cloud Run URL are on the run's **Summary** page
+              (image refs embed private identifiers, so they are omitted from public notes).
 
             ### Security gates (report-only — Juice Shop is intentionally vulnerable)
             - 🔑 Secrets — Gitleaks
@@ -410,6 +413,13 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+      # The Artifact Registry image ref is rebuilt inline here (not via a
+      # build-and-push job output) because GitHub scrubs secret values — the
+      # project id — from job outputs, which would leave --image empty.
+      - name: Compute image reference
+        id: img
+        run: |
+          echo "ref=${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY || 'devsecops' }}/juice-shop:${{ needs.build-and-push.outputs.tag }}" >> "$GITHUB_OUTPUT"
       # Deploying with a FIXED service name updates that same Cloud Run service
       # in place (a new revision) on every build — the instance and its URL stay
       # constant across builds; Cloud Run never creates a new service/URL here.
@@ -419,7 +429,7 @@ jobs:
         with:
           service: ${{ vars.CLOUD_RUN_SERVICE || 'juice-shop' }}
           region: ${{ vars.GCP_REGION || 'us-central1' }}
-          image: ${{ needs.build-and-push.outputs.gar_ref }}
+          image: ${{ steps.img.outputs.ref }}
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           flags: >-
             --allow-unauthenticated
@@ -438,6 +448,5 @@ jobs:
             echo "|---|---|"
             echo "| **Service** | \`${{ vars.CLOUD_RUN_SERVICE || 'juice-shop' }}\` (${{ vars.GCP_REGION || 'us-central1' }}) |"
             echo "| **URL** | $URL |"
-            echo "| **Image** | \`${{ needs.build-and-push.outputs.gar_ref }}\` |"
             echo "| **Release** | \`${{ needs.build-and-push.outputs.tag }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
