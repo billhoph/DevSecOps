@@ -489,7 +489,8 @@ $bg-hacking-instructor: rgba(0, 0, 0, 0.3);
 .billho-ninja-theme {
   @include custom-components-theme($billho-ninja-theme);
   @include css-vars($billho-ninja-theme);
-  @include theme-overrides(#0d1526, #0a0e1a, #151d30, #e9edf3);
+  // nav, canvas, card/surface, text — deeper canvas + lifted cards for richer contrast
+  @include theme-overrides(#0e1728, #080b13, #16203a, #eef2f8);
 
   // Logo-matched Material system accents (links, tertiary buttons, stars use these)
   --mat-sys-tertiary: #d9a441; // mask gold
@@ -841,4 +842,114 @@ div.mdc-card {
 /* override Angular Material tooltip max-height for score-board hints */
 .mat-mdc-tooltip-surface {
   max-height: none !important;
+}
+
+/* ============================================================
+   Bill Ho — production polish: typography (Poppins + Inter)
+   and a refined premium-dark treatment for the ninja theme.
+   ============================================================ */
+
+/* --- Typography: Inter for body, Poppins for headings --- */
+body {
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  letter-spacing: 0.1px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4, h5, h6,
+.mat-headline-large, .mat-headline-medium, .mat-headline-small,
+.mat-title-large, .mat-title-medium, .mat-title-small,
+.mat-display-large, .mat-display-medium, .mat-display-small,
+.mat-mdc-card-title, .mat-mdc-dialog-title, .item-name {
+  font-family: 'Poppins', 'Inter', sans-serif !important;
+  letter-spacing: -0.2px;
+  font-weight: 600;
+}
+
+.mat-toolbar, .mat-mdc-button, .mdc-button, .mat-mdc-raised-button,
+.mat-mdc-unelevated-button, .mat-mdc-outlined-button, .mat-mdc-tab,
+input, textarea, .mat-mdc-form-field, .mat-mdc-select {
+  font-family: 'Inter', 'Helvetica Neue', sans-serif;
+}
+
+/* Feed Material M3 typography tokens too, so untouched components follow suit */
+.billho-ninja-theme {
+  --mat-sys-brand-font-family: 'Poppins', 'Inter', sans-serif;
+  --mat-sys-plain-font-family: 'Inter', 'Helvetica Neue', sans-serif;
+}
+
+/* --- Refined premium-dark treatment --- */
+.billho-ninja-theme {
+  // Cards / panels: rounded, hairline gold border, soft depth, hover lift
+  .mat-mdc-card,
+  .mat-expansion-panel {
+    border-radius: 14px !important;
+    border: 1px solid rgba(212, 164, 65, 0.10) !important;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.38) !important;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  }
+
+  .mat-mdc-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55) !important;
+    border-color: rgba(212, 164, 65, 0.38) !important;
+  }
+
+  // Product / content imagery: rounded, consistent
+  .mat-mdc-card img,
+  .img-thumbnail,
+  .picture {
+    border-radius: 10px;
+  }
+
+  // Buttons: pill-shaped, confident weight
+  .mat-mdc-raised-button,
+  .mat-mdc-unelevated-button,
+  .mat-mdc-outlined-button,
+  .mat-mdc-button {
+    border-radius: 999px !important;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+
+  // Primary CTA: brushed-gold gradient (matches the logo's mask gold)
+  .mat-mdc-raised-button.mat-primary,
+  .mat-mdc-unelevated-button.mat-primary {
+    background: linear-gradient(135deg, #e6bd66 0%, #c98f2f 100%) !important;
+    color: #1a1205 !important;
+    box-shadow: 0 4px 14px rgba(217, 164, 65, 0.35) !important;
+  }
+
+  .mat-mdc-raised-button.mat-primary:hover,
+  .mat-mdc-unelevated-button.mat-primary:hover {
+    filter: brightness(1.06);
+  }
+
+  // Top app bar: subtle gold hairline + depth to feel like a real storefront header
+  .mat-toolbar,
+  mat-toolbar {
+    border-bottom: 1px solid rgba(212, 164, 65, 0.18);
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
+  }
+
+  // Inputs / search: rounded fields
+  .mat-mdc-text-field-wrapper {
+    border-radius: 10px !important;
+  }
+
+  // Keyboard focus: gold ring for accessibility + polish
+  a:focus-visible,
+  button:focus-visible,
+  .mat-mdc-button:focus-visible {
+    outline: 2px solid rgba(217, 164, 65, 0.65);
+    outline-offset: 2px;
+  }
+
+  // Emphasise prices in gold
+  .item-price,
+  .price {
+    color: #d9a441;
+    font-weight: 700;
+  }
 }

@@ -160,5 +160,5 @@ $billho-ninja-theme: mat.define-theme($billho-ninja-config);
 }
 
 html {
-  font-family: var(--mat-sys-body-medium-font, Roboto, 'Helvetica Neue', sans-serif);
+  font-family: 'Inter', var(--mat-sys-body-medium-font, Roboto, 'Helvetica Neue', sans-serif);
 }
