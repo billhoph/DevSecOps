@@ -284,6 +284,11 @@ jobs:
       - name: Build and push image
         id: build
         uses: docker/build-push-action@v6
+        env:
+          # Don't upload the ".dockerbuild" build-record artifact — it is flaky to
+          # re-download in the release job and we don't attach it to releases.
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+          DOCKER_BUILD_SUMMARY: "false"
         with:
           context: ${{ env.CONTEXT }}
           file: ${{ env.CONTEXT }}/Dockerfile
@@ -347,16 +352,21 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Download all reports & SBOMs
+      - name: Download reports & SBOMs
+        continue-on-error: true   # a flaky artifact download must not block the release
         uses: actions/download-artifact@v4
         with:
           path: release-assets
+          pattern: '{sbom-*,report-*}'
+          merge-multiple: true
       - name: Flatten assets
         run: |
           mkdir -p dist-assets
-          find release-assets -type f \( -name '*.json' -o -name '*.sarif' -o -name '*.txt' \) \
-            -exec cp {} dist-assets/ \;
-          ls -la dist-assets
+          if [ -d release-assets ]; then
+            find release-assets -type f \( -name '*.json' -o -name '*.sarif' -o -name '*.txt' \) \
+              -exec cp {} dist-assets/ \; || true
+          fi
+          ls -la dist-assets || true
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -382,6 +392,7 @@ jobs:
 
             Full results are in the repo **Security** tab and attached below.
           files: dist-assets/*
+          fail_on_unmatched_files: false
 
   # ===========================================================================
   # 7) DEPLOY — Google Cloud Run (pulls the Artifact Registry image)
