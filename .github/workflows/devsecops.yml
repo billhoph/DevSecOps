@@ -345,11 +345,56 @@ jobs:
           if-no-files-found: ignore
 
   # ===========================================================================
+  # 5b) IMAGE SCAN — Grype (dedicated container-image vulnerability scan)
+  #     Independent second scanner (defense in depth) alongside the Trivy image
+  #     scan in build-and-push; pairs with the Syft SBOM (both Anchore tooling).
+  #     Pulls the public Docker Hub image and reports to the Security tab.
+  # ===========================================================================
+  image-scan:
+    name: Image Scan · Grype
+    needs: build-and-push
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan pushed image with Grype
+        id: grype
+        uses: anchore/scan-action@v7.4.2
+        with:
+          image: ${{ env.DOCKERHUB_IMAGE }}:${{ needs.build-and-push.outputs.tag }}
+          fail-build: false          # report-only: Juice Shop is intentionally vulnerable
+          severity-cutoff: high      # only affects fail-build (kept false); tune to gate later
+          output-format: sarif
+      - name: Upload Grype SARIF to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
+          category: grype-image
+      - name: Upload Grype report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-image-grype
+          path: ${{ steps.grype.outputs.sarif }}
+          if-no-files-found: ignore
+      - name: Summarize Grype findings
+        if: always()
+        run: |
+          SARIF="${{ steps.grype.outputs.sarif }}"
+          if [ -f "$SARIF" ]; then
+            TOTAL=$(python3 -c "import json,sys; d=json.load(open('$SARIF')); print(sum(len(r.get('results',[])) for r in d.get('runs',[])))" 2>/dev/null || echo "?")
+            echo "## 🛡️ Grype image scan" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Image tag: \`${{ needs.build-and-push.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Findings reported: **$TOTAL** (see the **Security** tab, category \`grype-image\`)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ===========================================================================
   # 6) RELEASE — one GitHub Release per successful build (with scans + SBOMs)
   # ===========================================================================
   release:
     name: GitHub Release
-    needs: build-and-push
+    needs: [build-and-push, image-scan]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
