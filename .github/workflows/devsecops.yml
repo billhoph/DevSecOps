@@ -92,6 +92,9 @@ jobs:
           name: report-secrets-gitleaks
           path: gitleaks.sarif
           if-no-files-found: ignore
+      - name: Findings table → job summary
+        if: always()
+        run: python3 .github/scripts/sarif_summary.py detail "Gitleaks — secrets" "🔑" gitleaks.sarif >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
   # 2) SAST — Semgrep
@@ -125,6 +128,9 @@ jobs:
           name: report-sast-semgrep
           path: semgrep.sarif
           if-no-files-found: ignore
+      - name: Findings table → job summary
+        if: always()
+        run: python3 .github/scripts/sarif_summary.py detail "Semgrep — SAST" "🔍" semgrep.sarif >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
   # 3) SCA — Trivy filesystem scan (dependencies + misconfig + secrets)
@@ -170,6 +176,9 @@ jobs:
             trivy-sca.sarif
             trivy-sca.txt
           if-no-files-found: ignore
+      - name: Findings table → job summary
+        if: always()
+        run: python3 .github/scripts/sarif_summary.py detail "Trivy — dependencies & misconfig" "📦" trivy-sca.sarif >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
   # 4) SBOM — Syft (source, CycloneDX + SPDX)
@@ -200,6 +209,15 @@ jobs:
           path: |
             sbom.source.cyclonedx.json
             sbom.source.spdx.json
+      - name: SBOM summary → job summary
+        if: always()
+        run: |
+          N=$(python3 -c "import json;print(len(json.load(open('sbom.source.cyclonedx.json')).get('components',[])))" 2>/dev/null || echo '?')
+          {
+            echo "### 🧾 Syft — source SBOM"
+            echo ""
+            echo "Catalogued **$N** components → CycloneDX + SPDX (attached to the release)."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
   # 5) BUILD & PUSH container image (Docker Hub + Artifact Registry) + image scans
@@ -343,6 +361,9 @@ jobs:
             trivy-image.sarif
             sbom.image.cyclonedx.json
           if-no-files-found: ignore
+      - name: Image-scan findings table → job summary
+        if: github.event_name != 'pull_request'
+        run: python3 .github/scripts/sarif_summary.py detail "Trivy — container image" "📦" trivy-image.sarif >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
   # 5b) IMAGE SCAN — Grype (dedicated container-image vulnerability scan)
@@ -356,6 +377,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4   # for .github/scripts/sarif_summary.py
       - name: Scan pushed image with Grype
         id: grype
         uses: anchore/scan-action@v7.4.2
@@ -377,17 +399,9 @@ jobs:
           name: report-image-grype
           path: ${{ steps.grype.outputs.sarif }}
           if-no-files-found: ignore
-      - name: Summarize Grype findings
+      - name: Findings table → job summary
         if: always()
-        run: |
-          SARIF="${{ steps.grype.outputs.sarif }}"
-          if [ -f "$SARIF" ]; then
-            TOTAL=$(python3 -c "import json,sys; d=json.load(open('$SARIF')); print(sum(len(r.get('results',[])) for r in d.get('runs',[])))" 2>/dev/null || echo "?")
-            echo "## 🛡️ Grype image scan" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Image tag: \`${{ needs.build-and-push.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Findings reported: **$TOTAL** (see the **Security** tab, category \`grype-image\`)" >> "$GITHUB_STEP_SUMMARY"
-          fi
+        run: python3 .github/scripts/sarif_summary.py detail "Grype — container image" "🛡️" "${{ steps.grype.outputs.sarif }}" >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
   # 6) RELEASE — one GitHub Release per successful build (with scans + SBOMs)
@@ -398,6 +412,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4   # for .github/scripts/sarif_summary.py
       - name: Download reports & SBOMs
         continue-on-error: true   # a flaky artifact download must not block the release
         uses: actions/download-artifact@v4
@@ -413,6 +428,9 @@ jobs:
               -exec cp {} dist-assets/ \; || true
           fi
           ls -la dist-assets || true
+      - name: Security summary (all stages) → job summary
+        if: always()
+        run: python3 .github/scripts/sarif_summary.py aggregate dist-assets >> "$GITHUB_STEP_SUMMARY"
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
