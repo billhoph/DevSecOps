@@ -386,22 +386,25 @@ jobs:
           fail-build: false          # report-only: Juice Shop is intentionally vulnerable
           severity-cutoff: high      # only affects fail-build (kept false); tune to gate later
           output-format: sarif
+      - name: Normalize SARIF filename
+        if: always()
+        run: cp "${{ steps.grype.outputs.sarif }}" grype.sarif   # action writes a file named "output"
       - name: Upload Grype SARIF to Security tab
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: ${{ steps.grype.outputs.sarif }}
+          sarif_file: grype.sarif
           category: grype-image
       - name: Upload Grype report artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: report-image-grype
-          path: ${{ steps.grype.outputs.sarif }}
+          path: grype.sarif
           if-no-files-found: ignore
       - name: Findings table → job summary
         if: always()
-        run: python3 .github/scripts/sarif_summary.py detail "Grype — container image" "🛡️" "${{ steps.grype.outputs.sarif }}" >> "$GITHUB_STEP_SUMMARY"
+        run: python3 .github/scripts/sarif_summary.py detail "Grype — container image" "🛡️" grype.sarif >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
   # 6) RELEASE — one GitHub Release per successful build (with scans + SBOMs)

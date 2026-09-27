@@ -86,9 +86,11 @@ def parse(sarif):
     driver = "Unknown"
     for run in sarif.get("runs", []):
         driver = run.get("tool", {}).get("driver", {}).get("name", driver)
+        is_secrets = (driver or "").lower() == "gitleaks"
         ridx = rules_index(run)
         for r in run.get("results", []):
-            sev = sev_of(r, ridx)
+            # Gitleaks findings carry no severity; a leaked secret is High-impact.
+            sev = "High" if is_secrets else sev_of(r, ridx)
             counts[sev] += 1
             findings.append({"sev": sev, "id": r.get("ruleId", ""),
                              "loc": location(r), "msg": msg(r)})
