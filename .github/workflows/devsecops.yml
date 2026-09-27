@@ -431,35 +431,41 @@ jobs:
               -exec cp {} dist-assets/ \; || true
           fi
           ls -la dist-assets || true
-      - name: Security summary (all stages) → job summary
+      - name: Build aggregate security summary
         if: always()
-        run: python3 .github/scripts/sarif_summary.py aggregate dist-assets >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          python3 .github/scripts/sarif_summary.py aggregate dist-assets > security-summary.md
+          cat security-summary.md >> "$GITHUB_STEP_SUMMARY"   # → run Summary page
+      - name: Compose release notes
+        if: always()
+        run: |
+          cat > release-body.md <<'EOF'
+          ## Automated DevSecOps build
+
+          **Version:** `${{ needs.build-and-push.outputs.version }}` (build #${{ github.run_number }})
+          **Commit:** ${{ github.sha }}
+
+          ### Container image
+          - Tag: `${{ needs.build-and-push.outputs.tag }}`
+          - Digest: `${{ needs.build-and-push.outputs.digest }}`
+          - Pushed to Docker Hub (`joanjoho/devsecops`) and Google Artifact Registry.
+            Full registry refs and the Cloud Run URL are on the run's **Summary** page
+            (image refs embed private identifiers, so they are omitted from public notes).
+
+          ### Security gates (report-only — Juice Shop is intentionally vulnerable)
+          - 🔑 Secrets — Gitleaks · 🔍 SAST — Semgrep · 📦 SCA — Trivy (fs + image) · 🛡️ Image — Grype · 🧾 SBOM — Syft
+
+          Full SARIF results are in the repo **Security** tab and attached to this release.
+
+          EOF
+          cat security-summary.md >> release-body.md
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.build-and-push.outputs.tag }}
           name: ${{ needs.build-and-push.outputs.tag }}
           generate_release_notes: true
-          body: |
-            ## Automated DevSecOps build
-
-            **Version:** `${{ needs.build-and-push.outputs.version }}`  (build #${{ github.run_number }})
-            **Commit:** ${{ github.sha }}
-
-            ### Container image
-            - Tag: `${{ needs.build-and-push.outputs.tag }}`
-            - Digest: `${{ needs.build-and-push.outputs.digest }}`
-            - Pushed to Docker Hub (`joanjoho/devsecops`) and Google Artifact Registry.
-              Full registry refs and the Cloud Run URL are on the run's **Summary** page
-              (image refs embed private identifiers, so they are omitted from public notes).
-
-            ### Security gates (report-only — Juice Shop is intentionally vulnerable)
-            - 🔑 Secrets — Gitleaks
-            - 🔍 SAST — Semgrep
-            - 📦 SCA — Trivy (filesystem + image)
-            - 🧾 SBOM — Syft (source + image, CycloneDX & SPDX)
-
-            Full results are in the repo **Security** tab and attached below.
+          body_path: release-body.md
           files: dist-assets/*
           fail_on_unmatched_files: false
 
