@@ -199,14 +199,42 @@ def aggregate(directory):
     print("\n".join(out))
 
 
+def gate(directory, severity):
+    """Exit non-zero if any finding at or above <severity> exists across all SARIFs."""
+    sev = (severity or "").strip().capitalize()
+    if sev not in SEV_ORDER:
+        print(f"Gate severity '{severity}' not recognized — nothing to enforce.")
+        return 0
+    buckets = SEV_ORDER[: SEV_ORDER.index(sev) + 1]  # at or above
+    total = {s: 0 for s in SEV_ORDER}
+    for path in sorted(glob.glob(os.path.join(directory, "**", "*.sarif"), recursive=True)):
+        sarif = load(path)
+        if sarif is None:
+            continue
+        counts, _, _ = parse(sarif)
+        for s in SEV_ORDER:
+            total[s] += counts[s]
+    breach = sum(total[s] for s in buckets)
+    print(f"🔒 Gate threshold: {sev} and above ({', '.join(buckets)})")
+    print("   Counts → " + " · ".join(f"{s}: {total[s]}" for s in SEV_ORDER))
+    print(f"   Findings at/above {sev}: {breach}")
+    if breach > 0:
+        print(f"❌ GATE BREACHED: {breach} finding(s) at/above {sev}.")
+        return 1
+    print(f"✅ GATE PASSED: no findings at/above {sev}.")
+    return 0
+
+
 def main():
     if len(sys.argv) >= 5 and sys.argv[1] == "detail":
         detail(sys.argv[2], sys.argv[3], sys.argv[4])
     elif len(sys.argv) >= 3 and sys.argv[1] == "aggregate":
         aggregate(sys.argv[2])
+    elif len(sys.argv) >= 4 and sys.argv[1] == "gate":
+        sys.exit(gate(sys.argv[2], sys.argv[3]))
     else:
         sys.stderr.write("usage: sarif_summary.py detail <label> <emoji> <sarif> | "
-                         "aggregate <dir>\n")
+                         "aggregate <dir> | gate <dir> <severity>\n")
         sys.exit(2)
 
 
