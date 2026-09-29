@@ -480,40 +480,40 @@ $bg-hacking-instructor: rgba(0, 0, 0, 0.3);
   @include theme-overrides(#cddc39, #303030, #ddee48, #000);
 }
 
-// Bill Ho ninja theme — matches the Bill Ho logo:
-//   nav/toolbar  -> near-black navy (#0d1526)
-//   canvas       -> deep navy (#0a0e1a)
-//   cards/panels -> lifted navy (#151d30)
-//   text         -> near-white (#e9edf3)
-//   accent       -> mask gold (#d9a441); primary -> brushed steel (#c7ccd8)
+// Bill Ho theme — orange & yellow:
+//   nav/toolbar  -> orange (#f57c00)
+//   canvas       -> warm near-black (#160d03)
+//   cards/panels -> warm surface (#26170a)
+//   text         -> warm white (#fff4e6)
+//   accent       -> yellow (#ffc107); primary -> orange (#ff9800)
 .billho-ninja-theme {
   @include custom-components-theme($billho-ninja-theme);
   @include css-vars($billho-ninja-theme);
-  // nav, canvas, card/surface, text — deeper canvas + lifted cards for richer contrast
-  @include theme-overrides(#0e1728, #080b13, #16203a, #eef2f8);
+  // nav (orange), canvas (warm dark), card/surface (warm), text (warm white)
+  @include theme-overrides(#f57c00, #160d03, #26170a, #fff4e6);
 
-  // Logo-matched Material system accents (links, tertiary buttons, stars use these)
-  --mat-sys-tertiary: #d9a441; // mask gold
-  --mat-sys-on-tertiary: #1a1205;
-  --mat-sys-primary: #c7ccd8; // brushed steel
-  --mat-sys-on-primary: #0a0e1a;
+  // Material system accents — orange primary + yellow tertiary (links, stars, chips)
+  --mat-sys-tertiary: #ffc107; // yellow
+  --mat-sys-on-tertiary: #241800;
+  --mat-sys-primary: #ff9800; // orange
+  --mat-sys-on-primary: #241200;
 
-  // Keep project-specific accent variables in sync with the gold accent
-  --theme-accent: #d9a441;
-  --theme-accent-lighter: #e0b258;
-  --theme-accent-light: #e8c274;
-  --theme-accent-darker: #c69234;
-  --theme-accent-dark: #ac7f2b;
-  --theme-accent-fade-10: rgba(217, 164, 65, 0.1);
-  --theme-accent-fade-20: rgba(217, 164, 65, 0.2);
-  --theme-accent-fade-30: rgba(217, 164, 65, 0.3);
-  --theme-accent-fade-40: rgba(217, 164, 65, 0.4);
-  --theme-accent-fade-50: rgba(217, 164, 65, 0.5);
+  // Keep project-specific accent variables in sync with the yellow accent
+  --theme-accent: #ffc107;
+  --theme-accent-lighter: #ffd24d;
+  --theme-accent-light: #ffdd75;
+  --theme-accent-darker: #f0b400;
+  --theme-accent-dark: #d99e00;
+  --theme-accent-fade-10: rgba(255, 193, 7, 0.1);
+  --theme-accent-fade-20: rgba(255, 193, 7, 0.2);
+  --theme-accent-fade-30: rgba(255, 193, 7, 0.3);
+  --theme-accent-fade-40: rgba(255, 193, 7, 0.4);
+  --theme-accent-fade-50: rgba(255, 193, 7, 0.5);
 
-  // Gold links for crisp contrast on the navy canvas
+  // Yellow links for crisp contrast on the warm dark canvas
   a:link,
   a:visited {
-    color: #d9a441;
+    color: #ffc107;
   }
 }
 
@@ -881,11 +881,11 @@ input, textarea, .mat-mdc-form-field, .mat-mdc-select {
 
 /* --- Refined premium-dark treatment --- */
 .billho-ninja-theme {
-  // Cards / panels: rounded, hairline gold border, soft depth, hover lift
+  // Cards / panels: rounded, hairline yellow border, soft depth, hover lift
   .mat-mdc-card,
   .mat-expansion-panel {
     border-radius: 14px !important;
-    border: 1px solid rgba(212, 164, 65, 0.10) !important;
+    border: 1px solid rgba(255, 193, 7, 0.12) !important;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.38) !important;
     transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
   }
@@ -893,7 +893,7 @@ input, textarea, .mat-mdc-form-field, .mat-mdc-select {
   .mat-mdc-card:hover {
     transform: translateY(-4px);
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55) !important;
-    border-color: rgba(212, 164, 65, 0.38) !important;
+    border-color: rgba(255, 152, 0, 0.45) !important;
   }
 
   // Product / content imagery: rounded, consistent
@@ -913,12 +913,12 @@ input, textarea, .mat-mdc-form-field, .mat-mdc-select {
     letter-spacing: 0.2px;
   }
 
-  // Primary CTA: brushed-gold gradient (matches the logo's mask gold)
+  // Primary CTA: orange → yellow gradient
   .mat-mdc-raised-button.mat-primary,
   .mat-mdc-unelevated-button.mat-primary {
-    background: linear-gradient(135deg, #e6bd66 0%, #c98f2f 100%) !important;
-    color: #1a1205 !important;
-    box-shadow: 0 4px 14px rgba(217, 164, 65, 0.35) !important;
+    background: linear-gradient(135deg, #ff9800 0%, #ffc107 100%) !important;
+    color: #241200 !important;
+    box-shadow: 0 4px 14px rgba(255, 152, 0, 0.35) !important;
   }
 
   .mat-mdc-raised-button.mat-primary:hover,
@@ -926,10 +926,10 @@ input, textarea, .mat-mdc-form-field, .mat-mdc-select {
     filter: brightness(1.06);
   }
 
-  // Top app bar: subtle gold hairline + depth to feel like a real storefront header
+  // Top app bar: subtle yellow hairline + depth to feel like a real storefront header
   .mat-toolbar,
   mat-toolbar {
-    border-bottom: 1px solid rgba(212, 164, 65, 0.18);
+    border-bottom: 1px solid rgba(255, 193, 7, 0.28);
     box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
   }
 
@@ -938,18 +938,18 @@ input, textarea, .mat-mdc-form-field, .mat-mdc-select {
     border-radius: 10px !important;
   }
 
-  // Keyboard focus: gold ring for accessibility + polish
+  // Keyboard focus: yellow ring for accessibility + polish
   a:focus-visible,
   button:focus-visible,
   .mat-mdc-button:focus-visible {
-    outline: 2px solid rgba(217, 164, 65, 0.65);
+    outline: 2px solid rgba(255, 193, 7, 0.7);
     outline-offset: 2px;
   }
 
-  // Emphasise prices in gold
+  // Emphasise prices in yellow
   .item-price,
   .price {
-    color: #d9a441;
+    color: #ffc107;
     font-weight: 700;
   }
 }
