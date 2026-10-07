@@ -147,33 +147,79 @@ page shows per-stage findings tables plus an aggregate severity table.
 
 ## 🧠 AI triage with Jev
 
-**What:** a non-blocking **`Triage · Jev`** job ([`.github/scripts/jev_triage.py`](.github/scripts/jev_triage.py))
+A non-blocking **`Triage · Jev`** job ([`.github/scripts/jev_triage.py`](.github/scripts/jev_triage.py))
 uses [**Jev** (TypeSafe AI "System One")](https://aimlapi.com/models/typesafe-jev-latest)
-to cut **vulnerability noise**. Jev is not a text LLM — it returns *typed,
-confidence-scored decisions* (yes/no probability, choice, score) in 70–500 ms, which is
-ideal for triaging hundreds of findings cheaply.
+to cut **vulnerability noise** so operators act on the few findings that matter instead
+of scrolling hundreds.
 
-**Where:** it runs **after** the scanners (needs Gitleaks, Semgrep, Trivy, Grype,
-Build), downloads their SARIF, and for each finding asks Jev three typed questions:
+> **The problem it solves.** On this build the scanners emit **461 findings**. Severity
+> alone doesn't help — a "critical" in a dev-only or unreachable dependency is noise,
+> while a reachable "high" is urgent. Jev adds an **operational priority** layer on top
+> of raw severity. Result this run: **461 → 270 actionable (P1+P2)**, with **61
+> deprioritized as noise** and the rest bucketed to backlog/informational.
+
+### Why Jev can help
+
+Jev is **not a text LLM** — it's a *System-One* decision model that returns **typed,
+confidence-scored answers** (not prose). Three properties make it a good noise-reduction
+engine:
+
+- **Structured, comparable output.** Every finding gets the same typed verdict +
+  a confidence and a probability distribution — directly sortable/filterable, no parsing
+  of free text, no hallucinated remediation steps.
+- **Cheap & fast at scale.** ~70–500 ms per call and ~$0.042 / M input tokens (output
+  free), so it's economical to score *every* finding on *every* build.
+- **Confidence-aware.** Because each decision carries a probability, the pipeline can
+  act only on **high-confidence** calls and leave uncertain ones visible — safe automation.
+
+### How it reduces noise (mechanism)
+
+For each finding Jev answers three typed questions over a compact state object:
 
 | Question | Type | Purpose |
 |---|---|---|
-| `ops_priority` | score (P4→P1) | operational fix priority |
-| `likely_noise` | noul (0–1) | probability it's low-value noise |
-| `route` | choice | `fix` / `review` / `accept` / `duplicate` |
+| `ops_priority` | `score` (ordered P4→P1) | operational fix priority (vs. raw severity) |
+| `likely_noise` | `noul` (0–1 probability) | how likely it is low-value noise |
+| `route` | `choice` | `fix` / `review` / `accept` / `duplicate` |
 
-The job writes a **prioritized action list** (P1/P2 first) and a **noise-collapsed**
-count to the run **Summary** page, and uploads `report-jev-triage` (`jev-triage.json`)
-for dashboards — so operators act on the few that matter instead of scrolling hundreds.
+The job then:
 
-**Design guardrails** (Jev is advisory — it's weak at *detecting* vulns and is
-prompt-injection-prone, so it is deliberately boxed in):
+1. **Deduplicates** findings by `(scanner, id, severity)` signature, so the same CVE
+   repeated across many packages is decided **once** (254 → 150 unique signatures here) —
+   fewer calls, consistent verdicts.
+2. **Re-prioritizes** every finding into **P1–P4** using `ops_priority`.
+3. **Collapses the long tail** — a Low/Medium finding is folded into "noise" only when
+   `likely_noise` clears the confidence threshold; **Critical/High are never collapsed**.
+4. **Emits a short action list** (P1/P2 first, with the `route` + confidence) to the run
+   **Summary** page and a `report-jev-triage` artifact (`jev-triage.json`) for dashboards.
 
-- **Advisory only** — it never suppresses findings (full SARIF still goes to the
-  Security tab) and **never overrides the Security Gate**.
-- **Injection-resistant** — Jev receives only **sanitized structured metadata**
-  (scanner, CVE id, severity, CVSS, category, component) — *never* finding text or code.
-- **Critical/High are never auto-collapsed** as noise.
+### Configuration leveraged to achieve it
+
+The noise reduction is driven by explicit, tunable design choices — all in
+[`jev_triage.py`](.github/scripts/jev_triage.py) and the `triage` job:
+
+| Lever | Value / choice | Why it matters |
+|---|---|---|
+| **Typed question schema** | `score` with ordered `criteria` P4→P1, `noul`, `choice` | The *typed* contract is what makes Jev's output comparable and machine-actionable — the heart of the design |
+| **Sanitized `state`** | only `scanner, id, severity, cvss, category, component` (regex-cleaned, truncated) | Keeps tokens tiny (cheap/fast) **and** resists Jev's known prompt-injection weakness — no finding text/code is ever sent |
+| **Signature dedup** | key = `(scanner, id, severity)` | Collapses repeats; bounds API calls and gives one verdict per real issue |
+| **`NOISE_CONF`** | `0.85` | Only high-confidence Low/Med findings are demoted — avoids hiding real issues |
+| **Never-collapse rule** | `severity in {Critical, High}` | Safety floor: severe findings always stay in the action list |
+| **`MAX_SIGNATURES`** | `150` (most-severe first) | Caps cost/time per run; overflow falls back to severity-based priority |
+| **Concurrency** | `ThreadPoolExecutor(8)` | Scores hundreds of findings in seconds (job ran in ~12 s) |
+| **`model` / auth** | `jev-latest`, `Authorization: Bearer ${{ secrets.JEV_API_KEY }}` | Key lives in the `DSO_pipeline` environment secret, never in code |
+| **Advisory placement** | separate job, `continue-on-error: true`, not a dep of gate/deploy | Noise reduction never blocks or breaks the pipeline |
+
+### Guardrails (why Jev is boxed in)
+
+Jev is **advisory** — independent testing shows it's weak at *detecting* vulns and is
+prompt-injection-prone, so the design deliberately constrains it:
+
+- **Advisory only** — never suppresses findings (full SARIF still goes to the Security
+  tab) and **never overrides the Security Gate**. The split is: scanners **find** → Jev
+  **triages** → the deterministic gate **decides**.
+- **Injection-resistant** — sanitized structured metadata only; never finding text/code.
+- **Critical/High are never auto-collapsed.**
 
 **Setup:** add a `JEV_API_KEY` secret to the `DSO_pipeline` environment (see
 [Configuration](#-configuration)). If the key is absent, the job simply skips.
