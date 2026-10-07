@@ -5,9 +5,9 @@
 An end-to-end **DevSecOps reference pipeline** built around a customized, re-branded
 fork of [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/). Every push to
 `main` is scanned for secrets, code flaws, vulnerable dependencies and image CVEs,
-**AI-triaged to cut noise** (Jev), gated on a configurable severity threshold,
-packaged into a container with an SBOM, released, and deployed to Google Cloud Run —
-automatically.
+**AI-triaged to cut noise** (Jev), **traced from source to runtime** (lineage), gated on
+a configurable severity threshold, packaged into a container with an SBOM, released, and
+deployed to Google Cloud Run — automatically.
 
 > **🔴 Security note:** OWASP Juice Shop is *intentionally vulnerable* by design. It is
 > used here as a realistic target so the security tooling has something to find. The
@@ -24,6 +24,7 @@ automatically.
 - [The application](#-the-application)
 - [DevSecOps pipeline](#-devsecops-pipeline)
 - [AI triage with Jev](#-ai-triage-with-jev)
+- [Vulnerability lineage](#-vulnerability-lineage)
 - [Security gate](#-security-gate)
 - [Tools used](#-tools-used)
 - [Container image & registries](#-container-image--registries)
@@ -45,7 +46,8 @@ DevSecOps/
 │   │   └── devsecops.yml        # The full CI/CD + security pipeline
 │   └── scripts/
 │       ├── sarif_summary.py     # SARIF → Markdown tables + aggregate + gate
-│       └── jev_triage.py        # Jev AI triage / noise reduction
+│       ├── jev_triage.py        # Jev AI triage / noise reduction
+│       └── vuln_lineage.py      # Vulnerability lineage (source → runtime)
 ├── juice-shop/                  # Customized OWASP Juice Shop application
 │   ├── frontend/                # Angular + Angular Material SPA
 │   │   └── src/
@@ -118,10 +120,12 @@ flowchart LR
   E[Build &amp; Push image<br/>Docker Buildx<br/>+ Trivy image scan<br/>+ Syft image SBOM]
   E --> F[Image Scan<br/>Grype]
   F --> T[🧠 Triage<br/>Jev AI noise reduction]
+  F --> L[🧬 Lineage<br/>source → runtime]
   F --> J[🔒 Security Gate<br/>severity threshold]
   J --> G[GitHub Release<br/>tag + SBOMs + reports]
   G --> H[Deploy<br/>Google Cloud Run]
   T -.advisory.-> G
+  L -.advisory.-> G
 ```
 
 ### Jobs
@@ -135,9 +139,10 @@ flowchart LR
 | 5 | **Build & Push image** | Buildx build of `juice-shop/`, pushes to Docker Hub **and** Artifact Registry; runs an in-build **Trivy image scan** + **Syft image SBOM**; auto-creates the Artifact Registry repo if missing |
 | 6 | **Image Scan · Grype** | Dedicated container-image vulnerability scan (defense-in-depth, second engine) → SARIF |
 | 7 | **🧠 Triage · Jev** | **AI noise reduction** — turns all findings into a prioritized P1–P4 action list and collapses low-value noise (advisory, non-blocking). See [AI triage with Jev](#-ai-triage-with-jev) |
-| 8 | **🔒 Security Gate** | Optional severity threshold (`none`/`CRITICAL`/`HIGH`/`MEDIUM`) in `warn` or `enforce` mode. See [Security gate](#-security-gate) |
-| 9 | **GitHub Release** | Creates one Release per build with the aggregate summary + SBOMs + scan reports attached |
-| 10 | **Deploy · Cloud Run** | Deploys the image to a fixed Cloud Run service (in-place update, stable URL) |
+| 8 | **🧬 Lineage · source→runtime** | Traces each vulnerability through the stages and flags whether it **reaches the production image** vs. is stopped at build (advisory, non-blocking). See [Vulnerability lineage](#-vulnerability-lineage) |
+| 9 | **🔒 Security Gate** | Optional severity threshold (`none`/`CRITICAL`/`HIGH`/`MEDIUM`) in `warn` or `enforce` mode. See [Security gate](#-security-gate) |
+| 10 | **GitHub Release** | Creates one Release per build with the aggregate summary + SBOMs + scan reports attached |
+| 11 | **Deploy · Cloud Run** | Deploys the image to a fixed Cloud Run service (in-place update, stable URL) |
 
 All scan results are uploaded to the repository's **Security ▸ Code scanning** tab
 (SARIF) and attached to each GitHub Release as artifacts, and each run's **Summary**
@@ -217,12 +222,58 @@ prompt-injection-prone, so the design deliberately constrains it:
 
 - **Advisory only** — never suppresses findings (full SARIF still goes to the Security
   tab) and **never overrides the Security Gate**. The split is: scanners **find** → Jev
-  **triages** → the deterministic gate **decides**.
+  **triages** → lineage **traces to runtime** → the deterministic gate **decides**.
 - **Injection-resistant** — sanitized structured metadata only; never finding text/code.
 - **Critical/High are never auto-collapsed.**
 
 **Setup:** add a `JEV_API_KEY` secret to the `DSO_pipeline` environment (see
 [Configuration](#-configuration)). If the key is absent, the job simply skips.
+
+---
+
+## 🧬 Vulnerability lineage
+
+**What:** a non-blocking **`Lineage · source→runtime`** job
+([`.github/scripts/vuln_lineage.py`](.github/scripts/vuln_lineage.py)) traces **where each
+vulnerability enters and whether it actually reaches the production runtime** — the
+ultimate noise cut, since a finding that never ships is far lower priority.
+
+**How:** it correlates every scanner's SARIF with the **source and image SBOMs** by
+normalized CVE/GHSA id across the pipeline stages:
+
+```
+Source (Trivy-fs · Semgrep · Gitleaks · source SBOM)
+  → Build + Image (Trivy image scan · Syft image SBOM)
+  → Image Scan (Grype)
+  → Runtime (Cloud Run)
+```
+
+Each vulnerability gets a **propagation verdict**:
+
+- **🔴 reaches runtime** — found by the image scanners (Trivy-image/Grype, which inspect
+  the *actual built-and-pushed* image) or present in the image SBOM → it's in the deployed
+  container.
+- **🛑 stopped at build** — present at source but **absent from the shipped image** (e.g. a
+  `devDependency` pruned by `npm install --omit=dev`).
+
+**Where:** output goes to each run's **Summary** page — a Mermaid lineage diagram with live
+counts, a *"CVEs that reach production runtime"* table (CVE · package · which source/image
+scanners saw it · in image SBOM) and a *"stopped at build"* table — plus a
+`report-vuln-lineage` artifact (`vuln-lineage.json`) for dashboards.
+
+**Example (a recent build):**
+
+| Category | Result |
+|---|---|
+| Unique CVE/GHSA correlated | **174** → **🔴 174 reach runtime**, 🛑 0 stopped at build |
+| IaC / config + secrets (Trivy-fs) | 94 — scanned in the repo; terraform etc. is **not** in the app container → does not reach this runtime |
+| SAST code (Semgrep) | 68 — ships with the app → present in runtime |
+| Secrets (Gitleaks) | 66 — committed in the repo; some in files the Dockerfile prunes |
+
+> 💡 **Lineage insight:** dependency CVEs are first observed at the **image stage** — the
+> source filesystem scan sees only the manifest, while the full vulnerable dependency tree
+> materializes after `npm install` in the build, which is exactly what the image scanners and
+> image SBOM inspect.
 
 ---
 
@@ -237,7 +288,7 @@ An optional **`Security Gate`** job enforces a severity threshold. It is driven 
 
 Run it from **Actions ▸ DevSecOps CI/CD ▸ Run workflow** and pick a severity + mode.
 The gate is deterministic (it counts SARIF findings via `sarif_summary.py gate`) — the
-reliable half of the "scanners find → Jev triages → gate decides" split.
+reliable half of the "scanners find → Jev triages → lineage traces → gate decides" split.
 
 ---
 
@@ -352,13 +403,15 @@ docker run --rm -p 3000:3000 joanjoho/devsecops:latest
 The scanners are configured **report-only** (`continue-on-error` / `exit-code: 0` /
 `fail-build: false`) on purpose: Juice Shop is deliberately vulnerable, so a blocking
 gate would never let it ship. Findings are still fully surfaced in the **Security** tab
-and each Release, **AI-triaged by Jev** into a prioritized action list, and can be
+and each Release, **AI-triaged by Jev** into a prioritized action list,
+**traced to runtime** by the [lineage](#-vulnerability-lineage) job, and can be
 **blocked on demand** via the [Security Gate](#-security-gate) (`enforce` mode).
 
 The split is deliberate: the **scanners find**, **Jev triages** (advisory — fast but
-not trusted for blocking), and the **deterministic gate decides** (reliable). To turn an
-individual scanner into a hard gate instead, remove its `continue-on-error` (or set
-Trivy `exit-code: 1` / Grype `fail-build: true`) in `.github/workflows/devsecops.yml`.
+not trusted for blocking), **lineage traces** what actually reaches runtime, and the
+**deterministic gate decides** (reliable). To turn an individual scanner into a hard gate
+instead, remove its `continue-on-error` (or set Trivy `exit-code: 1` /
+Grype `fail-build: true`) in `.github/workflows/devsecops.yml`.
 
 ---
 
