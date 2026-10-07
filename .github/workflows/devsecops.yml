@@ -327,11 +327,12 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.meta.outputs.build_date }}
             VCS_REF=${{ github.sha }}
+          # Candidate tags only (immutable version + sha). `:latest` is a PROMOTED
+          # pointer — applied by the `promote` job only after the Security Gate passes,
+          # so a gated-out image never becomes the latest/prod tag.
           tags: |
-            ${{ env.DOCKERHUB_IMAGE }}:latest
             ${{ env.DOCKERHUB_IMAGE }}:${{ steps.meta.outputs.tag }}
             ${{ env.DOCKERHUB_IMAGE }}:sha-${{ github.sha }}
-            ${{ steps.meta.outputs.gar_base }}:latest
             ${{ steps.meta.outputs.gar_ref }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -468,6 +469,44 @@ jobs:
             fi
           fi
           echo "**Result: ✅ PASSED**" >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # 5c-2) PROMOTE — apply the `:latest` pointer only AFTER the gate passes
+  #   Build pushes immutable candidate tags (version + sha). This job retags the
+  #   gate-approved image as `:latest` on both registries (no rebuild), so a
+  #   gated-out image never becomes latest/prod. Skipped if the gate fails.
+  # ===========================================================================
+  promote:
+    name: Promote :latest
+    needs: [build-and-push, security-gate]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: DSO_pipeline
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Login to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev
+          username: _json_key
+          password: ${{ secrets.GCP_SA_KEY }}
+      - name: Promote candidate → :latest
+        run: |
+          TAG="${{ needs.build-and-push.outputs.tag }}"
+          DH="${{ env.DOCKERHUB_IMAGE }}"
+          GAR="${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY || 'devsecops' }}/juice-shop"
+          docker buildx imagetools create -t "${DH}:latest" "${DH}:${TAG}"
+          docker buildx imagetools create -t "${GAR}:latest" "${GAR}:${TAG}"
+          echo "### Promoted to \`:latest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Gate-approved image \`${TAG}\` is now \`:latest\` on Docker Hub + Artifact Registry." >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
   # 5d) TRIAGE — Jev (TypeSafe System-One) advisory noise reduction
@@ -617,6 +656,8 @@ jobs:
     needs: [build-and-push, release, security-gate]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
     environment:
       name: DSO_pipeline
       url: ${{ steps.deploy.outputs.url }}
@@ -662,3 +703,25 @@ jobs:
             echo "| **URL** | $URL |"
             echo "| **Release** | \`${{ needs.build-and-push.outputs.tag }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # 8) DAST — OWASP ZAP baseline against the LIVE Cloud Run deployment
+  #   Dynamic testing of the running app (closes the "no DAST" gap). Report-only
+  #   (Juice Shop is intentionally vulnerable); uploads a ZAP report artifact.
+  # ===========================================================================
+  dast:
+    name: DAST · OWASP ZAP
+    needs: deploy
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: ZAP baseline scan (live runtime)
+        uses: zaproxy/action-baseline@v0.15.0
+        with:
+          target: ${{ needs.deploy.outputs.url }}
+          fail_action: false          # report-only
+          allow_issue_writing: false  # no auto-issues; report is uploaded as an artifact
+          cmd_options: '-a -I'
+      - name: Summary
+        if: always()
+        run: echo "### 🕷️ DAST · OWASP ZAP baseline ran against the live runtime (${{ needs.deploy.outputs.url }}); report attached as an artifact." >> "$GITHUB_STEP_SUMMARY"
