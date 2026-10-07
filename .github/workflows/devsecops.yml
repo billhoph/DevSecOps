@@ -470,6 +470,47 @@ jobs:
           echo "**Result: ✅ PASSED**" >> "$GITHUB_STEP_SUMMARY"
 
   # ===========================================================================
+  # 5d) TRIAGE — Jev (TypeSafe System-One) advisory noise reduction
+  #   Turns the raw scanner findings into a prioritized action list and collapses
+  #   low-value noise, to make operations easier. Jev makes only typed,
+  #   confidence-scored decisions over SANITIZED structured metadata (no finding
+  #   text, to resist prompt injection); it never suppresses findings and never
+  #   overrides the Security Gate. Non-blocking.
+  # ===========================================================================
+  triage:
+    name: Triage · Jev
+    needs: [secrets-scan, sast, sca, build-and-push, image-scan]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: DSO_pipeline   # holds JEV_API_KEY
+    continue-on-error: true     # advisory — must never fail the pipeline
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download scan reports
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          path: triage-assets
+          pattern: 'report-*'
+          merge-multiple: true
+      - name: Jev triage (noise reduction)
+        env:
+          JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
+        run: |
+          python3 .github/scripts/jev_triage.py triage-assets \
+            --summary jev-triage.md --json jev-triage.json
+          cat jev-triage.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Jev triage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-jev-triage
+          path: |
+            jev-triage.md
+            jev-triage.json
+          if-no-files-found: ignore
+
+  # ===========================================================================
   # 6) RELEASE — one GitHub Release per successful build (with scans + SBOMs)
   # ===========================================================================
   release:
