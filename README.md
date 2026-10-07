@@ -5,6 +5,7 @@
 An end-to-end **DevSecOps reference pipeline** built around a customized, re-branded
 fork of [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/). Every push to
 `main` is scanned for secrets, code flaws, vulnerable dependencies and image CVEs,
+**AI-triaged to cut noise** (Jev), gated on a configurable severity threshold,
 packaged into a container with an SBOM, released, and deployed to Google Cloud Run —
 automatically.
 
@@ -22,6 +23,8 @@ automatically.
 - [Repository layout](#-repository-layout)
 - [The application](#-the-application)
 - [DevSecOps pipeline](#-devsecops-pipeline)
+- [AI triage with Jev](#-ai-triage-with-jev)
+- [Security gate](#-security-gate)
 - [Tools used](#-tools-used)
 - [Container image & registries](#-container-image--registries)
 - [Releases](#-releases)
@@ -38,14 +41,18 @@ automatically.
 ```
 DevSecOps/
 ├── .github/
-│   └── workflows/
-│       └── devsecops.yml        # The full CI/CD + security pipeline
+│   ├── workflows/
+│   │   └── devsecops.yml        # The full CI/CD + security pipeline
+│   └── scripts/
+│       ├── sarif_summary.py     # SARIF → Markdown tables + aggregate + gate
+│       └── jev_triage.py        # Jev AI triage / noise reduction
 ├── juice-shop/                  # Customized OWASP Juice Shop application
 │   ├── frontend/                # Angular + Angular Material SPA
 │   │   └── src/
-│   │       ├── styles.scss      # "billho-ninja" theme + production polish
+│   │       ├── styles.scss      # Storefront design system (dark + light themes)
 │   │       ├── styles/theme.scss
-│   │       ├── index.html       # Fonts (Poppins/Inter), theme class
+│   │       ├── index.html       # Fonts, theme-init (dark/light), theme class
+│   │       ├── app/navbar/      # Navbar incl. theme toggle + language picker
 │   │       └── assets/public/images/products/  # Real CC-licensed product photos
 │   ├── config/default.yml       # App name, logo, theme, products, social links
 │   ├── lib/config.schema.ts     # Config validation (theme enum, social schema)
@@ -70,11 +77,16 @@ The app is OWASP Juice Shop re-skinned as a fictional **"Bill Ho"** juice store.
 
 **Customizations layered on top of upstream Juice Shop**
 
-- **Brand & theme** — a custom dark `billho-ninja` Angular Material theme (deep-navy
-  canvas, brushed-gold accents) matching the Bill Ho logo, defined in
-  `frontend/src/styles.scss` and `frontend/src/styles/theme.scss`.
-- **Typography** — **Poppins** (headings) + **Inter** (body) via Google Fonts, wired
-  through Material's M3 typography tokens.
+- **Production storefront redesign** — neutral canvas with orange/amber as a
+  restrained accent, refined type scale, tasteful radii and solid CTAs
+  (`frontend/src/styles.scss`, `styles/theme.scss`).
+- **Dark / light theme** — full light **and** dark Material surface sets switched via
+  `html[data-theme]`; a navbar sun/moon toggle persists to `localStorage`, and an
+  inline `index.html` script applies the saved/system scheme before first paint.
+- **Typography** — **Plus Jakarta Sans** (display) + **Inter** (text/UI) via Google
+  Fonts, wired through Material's M3 typography tokens.
+- **Multi-language** — Juice Shop's built-in i18n (**43 locales**) with a searchable
+  language picker in the navbar.
 - **Branding assets** — transparent Bill Ho logo, app renamed to *Bill Ho*.
 - **Real product photos** — 22 juice/drink product images replaced with real,
   **CC-licensed** photos sourced via the [Openverse](https://openverse.org) API
@@ -105,8 +117,11 @@ flowchart LR
   D --> E
   E[Build &amp; Push image<br/>Docker Buildx<br/>+ Trivy image scan<br/>+ Syft image SBOM]
   E --> F[Image Scan<br/>Grype]
-  F --> G[GitHub Release<br/>tag + SBOMs + reports]
+  F --> T[🧠 Triage<br/>Jev AI noise reduction]
+  F --> J[🔒 Security Gate<br/>severity threshold]
+  J --> G[GitHub Release<br/>tag + SBOMs + reports]
   G --> H[Deploy<br/>Google Cloud Run]
+  T -.advisory.-> G
 ```
 
 ### Jobs
@@ -119,11 +134,64 @@ flowchart LR
 | 4 | **SBOM · Syft** | Generates a source SBOM in **CycloneDX** and **SPDX** |
 | 5 | **Build & Push image** | Buildx build of `juice-shop/`, pushes to Docker Hub **and** Artifact Registry; runs an in-build **Trivy image scan** + **Syft image SBOM**; auto-creates the Artifact Registry repo if missing |
 | 6 | **Image Scan · Grype** | Dedicated container-image vulnerability scan (defense-in-depth, second engine) → SARIF |
-| 7 | **GitHub Release** | Creates one Release per build with SBOMs + scan reports attached |
-| 8 | **Deploy · Cloud Run** | Deploys the image to a fixed Cloud Run service (in-place update, stable URL) |
+| 7 | **🧠 Triage · Jev** | **AI noise reduction** — turns all findings into a prioritized P1–P4 action list and collapses low-value noise (advisory, non-blocking). See [AI triage with Jev](#-ai-triage-with-jev) |
+| 8 | **🔒 Security Gate** | Optional severity threshold (`none`/`CRITICAL`/`HIGH`/`MEDIUM`) in `warn` or `enforce` mode. See [Security gate](#-security-gate) |
+| 9 | **GitHub Release** | Creates one Release per build with the aggregate summary + SBOMs + scan reports attached |
+| 10 | **Deploy · Cloud Run** | Deploys the image to a fixed Cloud Run service (in-place update, stable URL) |
 
 All scan results are uploaded to the repository's **Security ▸ Code scanning** tab
-(SARIF) and attached to each GitHub Release as artifacts.
+(SARIF) and attached to each GitHub Release as artifacts, and each run's **Summary**
+page shows per-stage findings tables plus an aggregate severity table.
+
+---
+
+## 🧠 AI triage with Jev
+
+**What:** a non-blocking **`Triage · Jev`** job ([`.github/scripts/jev_triage.py`](.github/scripts/jev_triage.py))
+uses [**Jev** (TypeSafe AI "System One")](https://aimlapi.com/models/typesafe-jev-latest)
+to cut **vulnerability noise**. Jev is not a text LLM — it returns *typed,
+confidence-scored decisions* (yes/no probability, choice, score) in 70–500 ms, which is
+ideal for triaging hundreds of findings cheaply.
+
+**Where:** it runs **after** the scanners (needs Gitleaks, Semgrep, Trivy, Grype,
+Build), downloads their SARIF, and for each finding asks Jev three typed questions:
+
+| Question | Type | Purpose |
+|---|---|---|
+| `ops_priority` | score (P4→P1) | operational fix priority |
+| `likely_noise` | noul (0–1) | probability it's low-value noise |
+| `route` | choice | `fix` / `review` / `accept` / `duplicate` |
+
+The job writes a **prioritized action list** (P1/P2 first) and a **noise-collapsed**
+count to the run **Summary** page, and uploads `report-jev-triage` (`jev-triage.json`)
+for dashboards — so operators act on the few that matter instead of scrolling hundreds.
+
+**Design guardrails** (Jev is advisory — it's weak at *detecting* vulns and is
+prompt-injection-prone, so it is deliberately boxed in):
+
+- **Advisory only** — it never suppresses findings (full SARIF still goes to the
+  Security tab) and **never overrides the Security Gate**.
+- **Injection-resistant** — Jev receives only **sanitized structured metadata**
+  (scanner, CVE id, severity, CVSS, category, component) — *never* finding text or code.
+- **Critical/High are never auto-collapsed** as noise.
+
+**Setup:** add a `JEV_API_KEY` secret to the `DSO_pipeline` environment (see
+[Configuration](#-configuration)). If the key is absent, the job simply skips.
+
+---
+
+## 🔒 Security gate
+
+An optional **`Security Gate`** job enforces a severity threshold. It is driven by
+`workflow_dispatch` inputs so normal pushes stay report-only (the default):
+
+- **`gate_severity`** — `none` · `CRITICAL` · `HIGH` · `MEDIUM` (fail at this level *and above*)
+- **`gate_mode`** — `warn` (report, pipeline runs through) · `enforce` (**block**: fails
+  the gate, skipping Release + Deploy)
+
+Run it from **Actions ▸ DevSecOps CI/CD ▸ Run workflow** and pick a severity + mode.
+The gate is deterministic (it counts SARIF findings via `sarif_summary.py gate`) — the
+reliable half of the "scanners find → Jev triages → gate decides" split.
 
 ---
 
@@ -137,6 +205,7 @@ All scan results are uploaded to the repository's **Security ▸ Code scanning**
 | Image vuln scan (in build) | [**Trivy**](https://github.com/aquasecurity/trivy) | CVE scan of the built container image |
 | Image vuln scan (dedicated) | [**Grype**](https://github.com/anchore/grype) | Independent second-engine image CVE scan |
 | SBOM | [**Syft**](https://github.com/anchore/syft) | Source & image SBOMs (CycloneDX + SPDX) |
+| AI triage | [**Jev** (TypeSafe System One)](https://aimlapi.com/models/typesafe-jev-latest) | Typed, confidence-scored decisions to prioritize findings & reduce noise |
 | Build | [**Docker Buildx**](https://docs.docker.com/build/) | Multi-stage container build + push |
 | CI/CD | [**GitHub Actions**](https://github.com/features/actions) | Orchestration, SARIF upload, releases |
 | Registries | **Docker Hub** + **Google Artifact Registry** | Image distribution |
@@ -165,7 +234,7 @@ distroless runtime) and pushed to **two** registries on every `main` build:
 Every successful `main` build cuts a [GitHub Release](https://github.com/billhoph/DevSecOps/releases)
 tagged `vX.Y.Z-build.<run#>`, with:
 
-- Auto-generated release notes
+- Auto-generated release notes + the **aggregate security summary table**
 - Image tag + digest
 - Attached **SBOMs** (source + image) and **scan reports** (Gitleaks, Semgrep, Trivy, Grype)
 
@@ -185,7 +254,7 @@ Cloud Run service in place (new revision) — the instance and public URL stay c
 ## ⚙️ Configuration
 
 Secrets and variables live in the **`DSO_pipeline`** GitHub Environment
-(*Settings ▸ Environments*), which the build & deploy jobs reference.
+(*Settings ▸ Environments*), which the build, triage & deploy jobs reference.
 
 **Secrets**
 
@@ -194,6 +263,7 @@ Secrets and variables live in the **`DSO_pipeline`** GitHub Environment
 | `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | Push to `joanjoho/devsecops` |
 | `GCP_PROJECT_ID` | Target Google Cloud project |
 | `GCP_SA_KEY` | Service-account JSON: **Artifact Registry Admin/Writer**, **Cloud Run Admin**, **Service Account User** |
+| `JEV_API_KEY` | *(optional)* [Jev](https://api.typesafe.ai) API key for the AI triage job (job skips if absent) |
 | `SEMGREP_APP_TOKEN` | *(optional)* Semgrep managed rules |
 
 **Variables** *(optional — defaults shown)*
@@ -236,9 +306,12 @@ docker run --rm -p 3000:3000 joanjoho/devsecops:latest
 The scanners are configured **report-only** (`continue-on-error` / `exit-code: 0` /
 `fail-build: false`) on purpose: Juice Shop is deliberately vulnerable, so a blocking
 gate would never let it ship. Findings are still fully surfaced in the **Security** tab
-and each Release.
+and each Release, **AI-triaged by Jev** into a prioritized action list, and can be
+**blocked on demand** via the [Security Gate](#-security-gate) (`enforce` mode).
 
-To turn any scanner into a **hard gate**, remove its `continue-on-error` (or set
+The split is deliberate: the **scanners find**, **Jev triages** (advisory — fast but
+not trusted for blocking), and the **deterministic gate decides** (reliable). To turn an
+individual scanner into a hard gate instead, remove its `continue-on-error` (or set
 Trivy `exit-code: 1` / Grype `fail-build: true`) in `.github/workflows/devsecops.yml`.
 
 ---
@@ -249,4 +322,4 @@ Trivy `exit-code: 1` / Grype `fail-build: true`) in `.github/workflows/devsecops
 - **Product photos** — sourced via the Openverse API under CC0 / CC-BY / CC-BY-SA;
   per-image credits in
   [`products/PHOTO_CREDITS.md`](juice-shop/frontend/src/assets/public/images/products/PHOTO_CREDITS.md).
-- **Fonts** — Poppins & Inter (SIL Open Font License) via Google Fonts.
+- **Fonts** — Plus Jakarta Sans & Inter (SIL Open Font License) via Google Fonts.
