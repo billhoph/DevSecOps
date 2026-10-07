@@ -109,6 +109,13 @@
       <span class="fa-layers-counter fa-layers-top-right fa-3x warn-notification">{{itemTotal}}</span>
     </button>
 
+    <button id="navbarThemeToggle" mat-button class="buttons nav-square-button"
+      (click)="toggleTheme()"
+      [attr.aria-label]="isDark ? 'Switch to light theme' : 'Switch to dark theme'"
+      matTooltip="{{ isDark ? 'Light mode' : 'Dark mode' }}" matTooltipPosition="below">
+      <mat-icon>{{ isDark ? 'light_mode' : 'dark_mode' }}</mat-icon>
+    </button>
+
     <button id="navbarLanguageButton" [matMenuTriggerFor]="menu" mat-button class="buttons nav-square-button"
       aria-label="Language selection menu"
       matTooltip="{{ 'LANGUAGE_SEL_HINT' | translate }}" matTooltipPosition="below">

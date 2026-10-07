@@ -480,40 +480,90 @@ $bg-hacking-instructor: rgba(0, 0, 0, 0.3);
   @include theme-overrides(#cddc39, #303030, #ddee48, #000);
 }
 
-// Bill Ho theme — orange & yellow:
-//   nav/toolbar  -> orange (#f57c00)
-//   canvas       -> warm near-black (#160d03)
-//   cards/panels -> warm surface (#26170a)
-//   text         -> warm white (#fff4e6)
-//   accent       -> yellow (#ffc107); primary -> orange (#ff9800)
+// Bill Ho storefront theme — orange/amber accent on a neutral canvas.
+// Brand accents are shared; surfaces switch between dark (default) and light
+// via the html[data-theme] attribute (toggled from the navbar).
 .billho-ninja-theme {
   @include custom-components-theme($billho-ninja-theme);
   @include css-vars($billho-ninja-theme);
-  // nav (orange), canvas (warm dark), card/surface (warm), text (warm white)
-  @include theme-overrides(#f57c00, #160d03, #26170a, #fff4e6);
 
-  // Material system accents — orange primary + yellow tertiary (links, stars, chips)
-  --mat-sys-tertiary: #ffc107; // yellow
-  --mat-sys-on-tertiary: #241800;
-  --mat-sys-primary: #ff9800; // orange
-  --mat-sys-on-primary: #241200;
+  // Brand accent palette (shared across both modes)
+  --mat-sys-primary: #ea6a0a; // orange — primary / CTA
+  --mat-sys-on-primary: #ffffff;
+  --mat-sys-tertiary: #e0920a; // amber — links / highlights
+  --mat-sys-on-tertiary: #241500;
+  --brand-orange: #ea6a0a;
+  --brand-orange-strong: #cf5c05;
+  --brand-amber: #f2a60c;
 
-  // Keep project-specific accent variables in sync with the yellow accent
-  --theme-accent: #ffc107;
-  --theme-accent-lighter: #ffd24d;
-  --theme-accent-light: #ffdd75;
-  --theme-accent-darker: #f0b400;
-  --theme-accent-dark: #d99e00;
-  --theme-accent-fade-10: rgba(255, 193, 7, 0.1);
-  --theme-accent-fade-20: rgba(255, 193, 7, 0.2);
-  --theme-accent-fade-30: rgba(255, 193, 7, 0.3);
-  --theme-accent-fade-40: rgba(255, 193, 7, 0.4);
-  --theme-accent-fade-50: rgba(255, 193, 7, 0.5);
+  --theme-accent: #ea6a0a;
+  --theme-accent-lighter: #f2800f;
+  --theme-accent-light: #ff922e;
+  --theme-accent-darker: #cf5c05;
+  --theme-accent-dark: #b34e04;
+  --theme-accent-fade-10: rgba(234, 106, 10, 0.1);
+  --theme-accent-fade-20: rgba(234, 106, 10, 0.2);
+  --theme-accent-fade-30: rgba(234, 106, 10, 0.3);
+  --theme-accent-fade-40: rgba(234, 106, 10, 0.4);
+  --theme-accent-fade-50: rgba(234, 106, 10, 0.5);
+}
 
-  // Yellow links for crisp contrast on the warm dark canvas
+// ---- DARK mode (default / no attribute) ----
+html:not([data-theme='light']) .billho-ninja-theme {
+  // nav, canvas, card/surface, text
+  @include theme-overrides(#141210, #0f0e0c, #1a1815, #ece8e1);
+  --brand-border: rgba(255, 255, 255, 0.08);
+  --brand-border-strong: rgba(255, 255, 255, 0.14);
+  --brand-card-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+  --brand-card-shadow-hover: 0 14px 34px rgba(0, 0, 0, 0.6);
+
+  // Complete the warm-neutral dark surface set
+  --mat-sys-background: #0f0e0c;
+  --mat-sys-on-background: #ece8e1;
+  --mat-sys-surface-dim: #0f0e0c;
+  --mat-sys-surface-bright: #35322d;
+  --mat-sys-surface-container-lowest: #0b0a09;
+  --mat-sys-surface-container-low: #17150f;
+  --mat-sys-surface-container: #1a1815;
+  --mat-sys-surface-container-high: #242019;
+  --mat-sys-surface-container-highest: #2e2a22;
+
   a:link,
   a:visited {
-    color: #ffc107;
+    color: #f2a60c;
+  }
+}
+
+// ---- LIGHT mode ----
+html[data-theme='light'] .billho-ninja-theme {
+  // white header, soft off-white canvas, white cards, near-black text
+  @include theme-overrides(#ffffff, #f6f5f2, #ffffff, #1b1a17);
+  --brand-border: rgba(20, 18, 14, 0.1);
+  --brand-border-strong: rgba(20, 18, 14, 0.16);
+  --brand-card-shadow: 0 4px 16px rgba(20, 18, 14, 0.07);
+  --brand-card-shadow-hover: 0 12px 28px rgba(20, 18, 14, 0.12);
+
+  // Complete the light surface set (base M3 theme is built dark)
+  --mat-sys-background: #f6f5f2;
+  --mat-sys-on-background: #1b1a17;
+  --mat-sys-surface: #ffffff;
+  --mat-sys-surface-dim: #e9e7e1;
+  --mat-sys-surface-bright: #ffffff;
+  --mat-sys-surface-container-lowest: #ffffff;
+  --mat-sys-surface-container-low: #faf9f6;
+  --mat-sys-surface-container: #f3f1ec;
+  --mat-sys-surface-container-high: #edebe5;
+  --mat-sys-surface-container-highest: #e7e4dd;
+  --mat-sys-on-surface: #1b1a17;
+  --mat-sys-on-surface-variant: #4a463f;
+  --mat-sys-outline: #b9b4a9;
+  --mat-sys-outline-variant: #ddd8cd;
+  --mat-sys-inverse-surface: #1b1a17;
+  --mat-sys-inverse-on-surface: #f6f5f2;
+
+  a:link,
+  a:visited {
+    color: #c85a06;
   }
 }
 
@@ -845,15 +895,15 @@ div.mdc-card {
 }
 
 /* ============================================================
-   Bill Ho — production polish: typography (Poppins + Inter)
-   and a refined premium-dark treatment for the ninja theme.
+   Bill Ho — production storefront design system
+   Typography: Plus Jakarta Sans (display) + Inter (text/UI)
    ============================================================ */
 
-/* --- Typography: Inter for body, Poppins for headings --- */
 body {
   font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
-  letter-spacing: 0.1px;
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
 
@@ -862,9 +912,10 @@ h1, h2, h3, h4, h5, h6,
 .mat-title-large, .mat-title-medium, .mat-title-small,
 .mat-display-large, .mat-display-medium, .mat-display-small,
 .mat-mdc-card-title, .mat-mdc-dialog-title, .item-name {
-  font-family: 'Poppins', 'Inter', sans-serif !important;
-  letter-spacing: -0.2px;
-  font-weight: 600;
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif !important;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 .mat-toolbar, .mat-mdc-button, .mdc-button, .mat-mdc-raised-button,
@@ -875,81 +926,85 @@ input, textarea, .mat-mdc-form-field, .mat-mdc-select {
 
 /* Feed Material M3 typography tokens too, so untouched components follow suit */
 .billho-ninja-theme {
-  --mat-sys-brand-font-family: 'Poppins', 'Inter', sans-serif;
+  --mat-sys-brand-font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
   --mat-sys-plain-font-family: 'Inter', 'Helvetica Neue', sans-serif;
 }
 
-/* --- Refined premium-dark treatment --- */
+/* --- Production storefront component treatment (theme-aware) --- */
 .billho-ninja-theme {
-  // Cards / panels: rounded, hairline yellow border, soft depth, hover lift
+  --brand-radius: 12px;
+  --brand-radius-sm: 8px;
+
+  // Cards / panels: restrained radius, hairline border, soft depth, gentle hover lift
   .mat-mdc-card,
   .mat-expansion-panel {
-    border-radius: 14px !important;
-    border: 1px solid rgba(255, 193, 7, 0.12) !important;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.38) !important;
-    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    border-radius: var(--brand-radius) !important;
+    border: 1px solid var(--brand-border, rgba(255, 255, 255, 0.08)) !important;
+    box-shadow: var(--brand-card-shadow, 0 6px 20px rgba(0, 0, 0, 0.3)) !important;
+    transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
   }
 
   .mat-mdc-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55) !important;
-    border-color: rgba(255, 152, 0, 0.45) !important;
+    transform: translateY(-3px);
+    box-shadow: var(--brand-card-shadow-hover, 0 14px 34px rgba(0, 0, 0, 0.45)) !important;
+    border-color: var(--brand-border-strong, rgba(234, 106, 10, 0.4)) !important;
   }
 
-  // Product / content imagery: rounded, consistent
+  // Product / content imagery: consistent corners
   .mat-mdc-card img,
   .img-thumbnail,
   .picture {
-    border-radius: 10px;
+    border-radius: var(--brand-radius-sm);
   }
 
-  // Buttons: pill-shaped, confident weight
+  // Buttons: tasteful radius + weight (no more kindergarten pills)
   .mat-mdc-raised-button,
   .mat-mdc-unelevated-button,
   .mat-mdc-outlined-button,
   .mat-mdc-button {
-    border-radius: 999px !important;
+    border-radius: var(--brand-radius-sm) !important;
     font-weight: 600;
-    letter-spacing: 0.2px;
+    letter-spacing: 0.1px;
+    text-transform: none;
   }
 
-  // Primary CTA: orange → yellow gradient
+  // Primary CTA: solid brand orange with a subtle lift
   .mat-mdc-raised-button.mat-primary,
   .mat-mdc-unelevated-button.mat-primary {
-    background: linear-gradient(135deg, #ff9800 0%, #ffc107 100%) !important;
-    color: #241200 !important;
-    box-shadow: 0 4px 14px rgba(255, 152, 0, 0.35) !important;
+    background: var(--brand-orange) !important;
+    color: #fff !important;
+    box-shadow: 0 2px 10px rgba(234, 106, 10, 0.3) !important;
   }
 
   .mat-mdc-raised-button.mat-primary:hover,
   .mat-mdc-unelevated-button.mat-primary:hover {
-    filter: brightness(1.06);
+    background: var(--brand-orange-strong) !important;
   }
 
-  // Top app bar: subtle yellow hairline + depth to feel like a real storefront header
+  // Top app bar: clean neutral header with a hairline divider
   .mat-toolbar,
   mat-toolbar {
-    border-bottom: 1px solid rgba(255, 193, 7, 0.28);
-    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
+    border-bottom: 1px solid var(--brand-border, rgba(0, 0, 0, 0.08));
+    box-shadow: none;
   }
 
-  // Inputs / search: rounded fields
+  // Inputs / search: consistent rounded fields
   .mat-mdc-text-field-wrapper {
-    border-radius: 10px !important;
+    border-radius: var(--brand-radius-sm) !important;
   }
 
-  // Keyboard focus: yellow ring for accessibility + polish
+  // Keyboard focus: brand ring for accessibility + polish
   a:focus-visible,
   button:focus-visible,
   .mat-mdc-button:focus-visible {
-    outline: 2px solid rgba(255, 193, 7, 0.7);
+    outline: 2px solid var(--brand-orange);
     outline-offset: 2px;
   }
 
-  // Emphasise prices in yellow
+  // Emphasise prices in the brand accent
   .item-price,
   .price {
-    color: #ffc107;
+    color: var(--brand-orange);
     font-weight: 700;
   }
 }

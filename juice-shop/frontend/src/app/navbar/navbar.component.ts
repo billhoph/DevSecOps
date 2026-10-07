@@ -112,10 +112,19 @@ export class NavbarComponent implements OnInit {
   public scoreBoardVisible = false
   public shortKeyLang = 'placeholder'
   public itemTotal = 0
+  public isDark = true
 
   @Output() public sidenavToggle = new EventEmitter()
 
+  toggleTheme (): void {
+    this.isDark = !this.isDark
+    const mode = this.isDark ? 'dark' : 'light'
+    document.documentElement.setAttribute('data-theme', mode)
+    try { localStorage.setItem('billho-theme', mode) } catch { /* storage may be unavailable */ }
+  }
+
   ngOnInit (): void {
+    this.isDark = document.documentElement.getAttribute('data-theme') !== 'light'
     this.getLanguages()
     this.basketService.getItemTotal().subscribe(x => (this.itemTotal = x))
     this.basketService.updateNumberOfCartItems()
