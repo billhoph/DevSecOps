@@ -4,10 +4,12 @@
 
 An end-to-end **DevSecOps reference pipeline** built around a customized, re-branded
 fork of [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/). Every push to
-`main` is scanned for secrets, code flaws, vulnerable dependencies and image CVEs,
-**AI-triaged to cut noise** (Jev), **traced from source to runtime** (lineage), gated on
-a configurable severity threshold, packaged into a container with an SBOM, released, and
-deployed to Google Cloud Run — automatically.
+`main` is type-checked, scanned for secrets, code flaws, vulnerable dependencies and
+image CVEs, **AI-triaged to cut noise** (Jev), **traced from source to runtime**
+(lineage), gated on a configurable severity threshold, built as a **candidate** image,
+**promoted to `:latest` only after the gate passes**, released with an SBOM, deployed to
+Google Cloud Run, and **dynamically scanned (DAST)** against the live runtime —
+automatically.
 
 > **🔴 Security note:** OWASP Juice Shop is *intentionally vulnerable* by design. It is
 > used here as a realistic target so the security tooling has something to find. The
@@ -112,20 +114,25 @@ flowchart LR
     B[SAST<br/>Semgrep]
     C[SCA<br/>Trivy fs]
     D[SBOM<br/>Syft]
+    TT[✅ Test<br/>typecheck gate]
   end
   A --> E
   B --> E
   C --> E
   D --> E
-  E[Build &amp; Push image<br/>Docker Buildx<br/>+ Trivy image scan<br/>+ Syft image SBOM]
+  TT --> E
+  E[Build &amp; Push image<br/>candidate tags only<br/>+ Trivy image scan + Syft image SBOM]
   E --> F[Image Scan<br/>Grype]
   F --> T[🧠 Triage<br/>Jev AI noise reduction]
   F --> L[🧬 Lineage<br/>source → runtime]
   F --> J[🔒 Security Gate<br/>severity threshold]
-  J --> G[GitHub Release<br/>tag + SBOMs + reports]
+  J --> P[⬆️ Promote<br/>:latest after gate]
+  J --> G[GitHub Release<br/>SBOMs + reports]
   G --> H[Deploy<br/>Google Cloud Run]
+  H --> Z[🕷️ DAST<br/>OWASP ZAP · live runtime]
   T -.advisory.-> G
   L -.advisory.-> G
+  A -.PR comment.-> PR[💬 PR feedback<br/>pull requests]
 ```
 
 ### Jobs
@@ -136,13 +143,17 @@ flowchart LR
 | 2 | **SAST · Semgrep** | Static code analysis for code-level vulnerabilities → SARIF |
 | 3 | **SCA · Trivy** | Filesystem scan of dependencies + IaC misconfig + secrets → SARIF + table |
 | 4 | **SBOM · Syft** | Generates a source SBOM in **CycloneDX** and **SPDX** |
-| 5 | **Build & Push image** | Buildx build of `juice-shop/`, pushes to Docker Hub **and** Artifact Registry; runs an in-build **Trivy image scan** + **Syft image SBOM**; auto-creates the Artifact Registry repo if missing |
-| 6 | **Image Scan · Grype** | Dedicated container-image vulnerability scan (defense-in-depth, second engine) → SARIF |
-| 7 | **🧠 Triage · Jev** | **AI noise reduction** — turns all findings into a prioritized P1–P4 action list and collapses low-value noise (advisory, non-blocking). See [AI triage with Jev](#-ai-triage-with-jev) |
-| 8 | **🧬 Lineage · source→runtime** | Traces each vulnerability through the stages and flags whether it **reaches the production image** vs. is stopped at build (advisory, non-blocking). See [Vulnerability lineage](#-vulnerability-lineage) |
-| 9 | **🔒 Security Gate** | Optional severity threshold (`none`/`CRITICAL`/`HIGH`/`MEDIUM`) in `warn` or `enforce` mode. See [Security gate](#-security-gate) |
-| 10 | **GitHub Release** | Creates one Release per build with the aggregate summary + SBOMs + scan reports attached |
-| 11 | **Deploy · Cloud Run** | Deploys the image to a fixed Cloud Run service (in-place update, stable URL) |
+| 5 | **✅ Test · typecheck** | Fast TypeScript type-check (`tsc --noEmit`) as a shift-left quality gate — the build depends on it |
+| 6 | **Build & Push image** | Buildx build of `juice-shop/`; pushes **candidate tags only** (`vX-build.N`, `sha-…`) to Docker Hub **and** Artifact Registry; runs an in-build **Trivy image scan** + **Syft image SBOM**; auto-creates the Artifact Registry repo if missing |
+| 7 | **Image Scan · Grype** | Dedicated container-image vulnerability scan (defense-in-depth, second engine) → SARIF |
+| 8 | **🧠 Triage · Jev** | **AI noise reduction** — turns all findings into a prioritized P1–P4 action list and collapses low-value noise (advisory, non-blocking). See [AI triage with Jev](#-ai-triage-with-jev) |
+| 9 | **🧬 Lineage · source→runtime** | Traces each vulnerability through the stages and flags whether it **reaches the production image** vs. is stopped at build (advisory, non-blocking). See [Vulnerability lineage](#-vulnerability-lineage) |
+| 10 | **🔒 Security Gate** | Optional severity threshold (`none`/`CRITICAL`/`HIGH`/`MEDIUM`) in `warn` or `enforce` mode. See [Security gate](#-security-gate) |
+| 11 | **⬆️ Promote `:latest`** | Retags the **gate-approved** image as `:latest` on both registries (no rebuild) — a gated-out image never becomes the latest/prod pointer. Skipped if the gate fails |
+| 12 | **GitHub Release** | Creates one Release per build with the aggregate summary + SBOMs + scan reports attached |
+| 13 | **Deploy · Cloud Run** | Deploys the image to a fixed Cloud Run service (in-place update, stable URL) |
+| 14 | **🕷️ DAST · OWASP ZAP** | OWASP ZAP **baseline scan against the live Cloud Run deployment** (dynamic testing, report-only, ZAP report artifact) |
+| 15 | **💬 PR security comment** | On pull requests, posts the aggregate scan summary as an (upserted) PR comment — a feedback loop so findings reach developers in context |
 
 All scan results are uploaded to the repository's **Security ▸ Code scanning** tab
 (SARIF) and attached to each GitHub Release as artifacts, and each run's **Summary**
@@ -302,7 +313,9 @@ reliable half of the "scanners find → Jev triages → lineage traces → gate 
 | Image vuln scan (in build) | [**Trivy**](https://github.com/aquasecurity/trivy) | CVE scan of the built container image |
 | Image vuln scan (dedicated) | [**Grype**](https://github.com/anchore/grype) | Independent second-engine image CVE scan |
 | SBOM | [**Syft**](https://github.com/anchore/syft) | Source & image SBOMs (CycloneDX + SPDX) |
+| DAST | [**OWASP ZAP**](https://www.zaproxy.org) | Baseline dynamic scan of the live Cloud Run runtime |
 | AI triage | [**Jev** (TypeSafe System One)](https://aimlapi.com/models/typesafe-jev-latest) | Typed, confidence-scored decisions to prioritize findings & reduce noise |
+| Typecheck | [**TypeScript**](https://www.typescriptlang.org) | `tsc --noEmit` shift-left quality gate before build |
 | Build | [**Docker Buildx**](https://docs.docker.com/build/) | Multi-stage container build + push |
 | CI/CD | [**GitHub Actions**](https://github.com/features/actions) | Orchestration, SARIF upload, releases |
 | Registries | **Docker Hub** + **Google Artifact Registry** | Image distribution |
@@ -322,7 +335,10 @@ distroless runtime) and pushed to **two** registries on every `main` build:
 > Cloud Run cannot pull directly from Docker Hub, so the same image is mirrored to
 > Artifact Registry and **Cloud Run deploys the Artifact Registry copy**.
 
-**Tags per build:** `latest`, `vX.Y.Z-build.<run#>`, and `sha-<commit>`.
+**Candidate → promote.** The build pushes only **immutable candidate tags**
+(`vX.Y.Z-build.<run#>` and `sha-<commit>`). The `:latest` pointer is applied by the
+separate **Promote** job **only after the Security Gate passes** — so a gated-out image
+never becomes the latest/prod tag (addresses the "push before gate" anti-pattern).
 
 ---
 
@@ -345,13 +361,16 @@ Cloud Run service in place (new revision) — the instance and public URL stay c
 - Service: `juice-shop` (region `us-central1` by default)
 - Flags: `--allow-unauthenticated --port=3000 --memory=1Gi --cpu=1 --max-instances=2`
 - The deployed URL is written to each run's **Summary** and to the **Environments ▸ DSO_pipeline** view.
+- After deploy, the **DAST** job runs an **OWASP ZAP baseline** against that live URL.
 
 ---
 
 ## ⚙️ Configuration
 
 Secrets and variables live in the **`DSO_pipeline`** GitHub Environment
-(*Settings ▸ Environments*), which the build, triage & deploy jobs reference.
+(*Settings ▸ Environments*), which the build, promote, triage & deploy jobs reference.
+(The Test, DAST and PR-comment jobs need no extra secrets — they use the built-in
+`GITHUB_TOKEN`.)
 
 **Secrets**
 
@@ -409,8 +428,9 @@ and each Release, **AI-triaged by Jev** into a prioritized action list,
 
 The split is deliberate: the **scanners find**, **Jev triages** (advisory — fast but
 not trusted for blocking), **lineage traces** what actually reaches runtime, and the
-**deterministic gate decides** (reliable). To turn an individual scanner into a hard gate
-instead, remove its `continue-on-error` (or set Trivy `exit-code: 1` /
+**deterministic gate decides** (reliable) — then **promote** only moves `:latest` on
+success, and **DAST** dynamically tests the deployed app. To turn an individual scanner
+into a hard gate instead, remove its `continue-on-error` (or set Trivy `exit-code: 1` /
 Grype `fail-build: true`) in `.github/workflows/devsecops.yml`.
 
 ---
