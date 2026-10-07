@@ -511,6 +511,42 @@ jobs:
           if-no-files-found: ignore
 
   # ===========================================================================
+  # 5e) LINEAGE — trace each vulnerability source → build → runtime
+  #   Correlates the SARIFs + source/image SBOMs to show which findings actually
+  #   reach the deployed container (image scan / image SBOM) vs. are stopped at
+  #   build (in source but not shipped). Non-blocking.
+  # ===========================================================================
+  lineage:
+    name: Lineage · source→runtime
+    needs: [secrets-scan, sast, sca, sbom, build-and-push, image-scan]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download scan reports + SBOMs
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          path: lineage-assets
+          pattern: '{report-*,sbom-*}'
+          merge-multiple: true
+      - name: Build vulnerability lineage
+        run: |
+          python3 .github/scripts/vuln_lineage.py lineage-assets \
+            --summary vuln-lineage.md --json vuln-lineage.json
+          cat vuln-lineage.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload lineage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-vuln-lineage
+          path: |
+            vuln-lineage.md
+            vuln-lineage.json
+          if-no-files-found: ignore
+
+  # ===========================================================================
   # 6) RELEASE — one GitHub Release per successful build (with scans + SBOMs)
   # ===========================================================================
   release:
